@@ -1,63 +1,139 @@
-# macOS
-.DS_Store
+# =============================================================================
+# Flash Sale Platform — .gitignore
+# =============================================================================
 
-# IntelliJ
+# ---------------------------------------------------------------------------
+# macOS
+# ---------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# ---------------------------------------------------------------------------
+# IntelliJ IDEA / JetBrains
+# ---------------------------------------------------------------------------
 .idea/
 *.iml
+*.iws
+.idea_modules/
 
+# ---------------------------------------------------------------------------
 # VS Code
+# ---------------------------------------------------------------------------
 .vscode/
 
-# Java
+# ---------------------------------------------------------------------------
+# Java build output
+# ---------------------------------------------------------------------------
 target/
 build/
 out/
 *.class
 
+# ---------------------------------------------------------------------------
 # Gradle
+# ---------------------------------------------------------------------------
 .gradle/
+gradle-app.setting
 
-# Maven
-.mvn/wrapper/maven-wrapper.jar
-
-# Logs
-logs/
-*.log
-
-# Environment
-.env
-.env.local
-
-# Docker
-docker-data/
-volumes/
-
-# Test artifacts
-coverage/
-test-results/
-
-# OS
-Thumbs.db
-
-# Temporary files
-*.tmp
-*.swp
-
-# Sonar
-.sonar/
-
-# Generated reports
-reports/
-
-# Benchmarks
+# ---------------------------------------------------------------------------
+# JVM runtime artifacts
+# ---------------------------------------------------------------------------
+*.hprof
 *.jfr
 
-# Secrets
+# ---------------------------------------------------------------------------
+# Spring Boot — local overrides only
+# application.yml IS committed. Local overrides and secrets are not.
+# ---------------------------------------------------------------------------
+**/application-local.yml
+**/application-local.properties
+**/application-secrets.yml
+**/application-secrets.properties
+
+# ---------------------------------------------------------------------------
+# Environment and secrets — NEVER commit these
+# ---------------------------------------------------------------------------
+.env
+.env.local
+.env.staging
+.env.production
 secrets/
 *.pem
 *.key
 *.p12
+*.jks
+*.pfx
 
-# Claude / AI generated exports
-artifacts.zip
-downloads/
+# ---------------------------------------------------------------------------
+# Terraform
+# deployment/terraform/ exists in this project.
+# terraform.tfvars holds real credentials — never committed.
+# .terraform/ is the local plugin cache — never committed.
+# *.tfstate contains live infrastructure state with sensitive values.
+# ---------------------------------------------------------------------------
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+terraform.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# ---------------------------------------------------------------------------
+# Helm
+# Chart dependencies are downloaded on deploy, not committed.
+# ---------------------------------------------------------------------------
+deployment/helm/charts/*/charts/
+deployment/helm/charts/*/tmpcharts/
+
+# ---------------------------------------------------------------------------
+# Docker local volume data
+# ---------------------------------------------------------------------------
+docker-data/
+volumes/
+
+# ---------------------------------------------------------------------------
+# Logs
+# ---------------------------------------------------------------------------
+logs/
+*.log
+*.log.*
+
+# ---------------------------------------------------------------------------
+# Test artifacts
+# ---------------------------------------------------------------------------
+coverage/
+test-results/
+.testcontainers.properties
+
+# ---------------------------------------------------------------------------
+# Gatling and k6 load test results
+# Raw HTML reports are large and generated — not committed.
+# benchmarks/reports/*.md baseline summaries ARE committed.
+# ---------------------------------------------------------------------------
+benchmarks/gatling/results/
+benchmarks/k6/results/
+
+# ---------------------------------------------------------------------------
+# Sonar
+# ---------------------------------------------------------------------------
+.sonar/
+.scannerwork/
+
+# ---------------------------------------------------------------------------
+# Temporary and OS files
+# ---------------------------------------------------------------------------
+*.tmp
+*.swp
+*.swo
+Thumbs.db
+ehthumbs.db

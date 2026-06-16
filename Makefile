@@ -46,7 +46,7 @@ health: ## Run full health check
 	@echo "\n=== Redis Cluster ==="
 	@docker exec flash-sale-redis-1 redis-cli -a redis_dev --no-auth-warning -h redis-node-1 CLUSTER INFO | grep cluster_state
 	@echo "\n=== Kafka ==="
-	@docker exec flash-sale-kafka kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1 && echo "  ✓ Kafka broker reachable" || echo "  ✗ Kafka FAILED"
+	@docker exec flash-sale-kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1 && echo "  ✓ Kafka broker reachable" || echo "  ✗ Kafka FAILED"
 	@echo "\n=== ClickHouse ==="
 	@curl -s --fail "http://localhost:8123/ping" && echo "  ✓ ClickHouse HTTP" || echo "  ✗ ClickHouse FAILED"
 	@echo "\n=== UIs ==="
@@ -58,27 +58,27 @@ health: ## Run full health check
 # ---------------------------------------------------------------------------
 
 kafka-topics: ## List all Kafka topics
-	@docker exec flash-sale-kafka kafka-topics.sh \
+	@docker exec flash-sale-kafka /opt/kafka/bin/kafka-topics.sh \
 	  --bootstrap-server localhost:9092 --list
 
 kafka-lag: ## Show consumer group lag for all groups
-	@docker exec flash-sale-kafka kafka-consumer-groups.sh \
+	@docker exec flash-sale-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
 	  --bootstrap-server localhost:9092 --describe --all-groups
 
 kafka-create-topics: ## Manually create all topics (services do this on startup)
-	@docker exec flash-sale-kafka kafka-topics.sh \
+	@docker exec flash-sale-kafka /opt/kafka/bin/kafka-topics.sh \
 	  --bootstrap-server localhost:9092 \
 	  --create --if-not-exists --topic sale-events      --partitions 8  --replication-factor 1
-	@docker exec flash-sale-kafka kafka-topics.sh \
+	@docker exec flash-sale-kafka /opt/kafka/bin/kafka-topics.sh \
 	  --bootstrap-server localhost:9092 \
 	  --create --if-not-exists --topic inventory-events --partitions 16 --replication-factor 1
-	@docker exec flash-sale-kafka kafka-topics.sh \
+	@docker exec flash-sale-kafka /opt/kafka/bin/kafka-topics.sh \
 	  --bootstrap-server localhost:9092 \
 	  --create --if-not-exists --topic order-events     --partitions 8  --replication-factor 1
-	@docker exec flash-sale-kafka kafka-topics.sh \
+	@docker exec flash-sale-kafka /opt/kafka/bin/kafka-topics.sh \
 	  --bootstrap-server localhost:9092 \
 	  --create --if-not-exists --topic notifications.dlq --partitions 4 --replication-factor 1
-	@docker exec flash-sale-kafka kafka-topics.sh \
+	@docker exec flash-sale-kafka /opt/kafka/bin/kafka-topics.sh \
 	  --bootstrap-server localhost:9092 \
 	  --create --if-not-exists --topic analytics.dlq    --partitions 4  --replication-factor 1
 	@echo "Topics created. Verify at http://localhost:18080"
