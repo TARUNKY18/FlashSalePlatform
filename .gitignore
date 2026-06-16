@@ -1,1 +1,63 @@
+# macOS
 .DS_Store
+
+# IntelliJ
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+
+# Java
+target/
+build/
+out/
+*.class
+
+# Gradle
+.gradle/
+
+# Maven
+.mvn/wrapper/maven-wrapper.jar
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+.env.local
+
+# Docker
+docker-data/
+volumes/
+
+# Test artifacts
+coverage/
+test-results/
+
+# OS
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.swp
+
+# Sonar
+.sonar/
+
+# Generated reports
+reports/
+
+# Benchmarks
+*.jfr
+
+# Secrets
+secrets/
+*.pem
+*.key
+*.p12
+
+# Claude / AI generated exports
+artifacts.zip
+downloads/

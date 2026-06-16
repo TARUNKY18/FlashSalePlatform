@@ -1,0 +1,520 @@
+# =============================================================================
+# Flash Sale Platform — Local Development Stack
+# =============================================================================
+# Services:
+#   PostgreSQL  ×3  — sales_db (5432), inventory_db (5433), orders_db (5434)
+#   Redis Cluster   — 6 nodes: 3 primary + 3 replica (7001–7006)
+#   Kafka KRaft     — single broker, no Zookeeper (9092)
+#   ClickHouse      — analytics store (8123 HTTP, 9000 native)
+#   Kafka UI        — topic browser (18080)
+#   RedisInsight    — Redis GUI (18081)
+#
+# Quick start:
+#   docker compose up -d
+#   docker compose ps           # all containers healthy?
+#   ./scripts/health-check.sh   # deep check
+#
+# Tear down (keep volumes):
+#   docker compose down
+#
+# Tear down (destroy everything):
+#   docker compose down -v --remove-orphans
+# =============================================================================
+
+name: flash-sale-platform
+
+# ---------------------------------------------------------------------------
+# Shared settings
+# ---------------------------------------------------------------------------
+x-postgres-common: &postgres-common
+  image: postgres:16.3-alpine
+  restart: unless-stopped
+  environment:
+    POSTGRES_USER: flashsale
+    POSTGRES_PASSWORD: flashsale_dev   # override via .env in production
+  networks: [flash-sale-net]
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U flashsale -d $$POSTGRES_DB"]
+    interval: 5s
+    timeout: 3s
+    retries: 12
+    start_period: 10s
+
+x-redis-node-common: &redis-node-common
+  image: redis:7.2.5-alpine
+  restart: unless-stopped
+  networks: [flash-sale-net]
+  # Redis Cluster requires the node to advertise its hostname/IP.
+  # In docker networking each node is reachable by its service name.
+  # The cluster-announce-hostname is set per-node in their configs.
+  healthcheck:
+    test: ["CMD", "redis-cli", "-p", "6379", "--no-auth-warning",
+           "-a", "${REDIS_PASSWORD:-redis_dev}", "PING"]
+    interval: 5s
+    timeout: 3s
+    retries: 12
+    start_period: 10s
+
+# ---------------------------------------------------------------------------
+# Networks
+# ---------------------------------------------------------------------------
+networks:
+  flash-sale-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+# ---------------------------------------------------------------------------
+# Volumes
+# ---------------------------------------------------------------------------
+volumes:
+  sales-db-data:
+  inventory-db-data:
+  orders-db-data:
+  redis-node-1-data:
+  redis-node-2-data:
+  redis-node-3-data:
+  redis-node-4-data:
+  redis-node-5-data:
+  redis-node-6-data:
+  kafka-data:
+  clickhouse-data:
+  clickhouse-logs:
+
+# ===========================================================================
+# Services
+# ===========================================================================
+services:
+
+  # =========================================================================
+  # POSTGRESQL — 3 isolated instances, one per bounded context
+  # =========================================================================
+  # Spec rule: zero cross-service joins — enforced by separate instances.
+  # A slow query on orders_db cannot steal I/O from inventory_db.
+
+  sales-db:
+    <<: *postgres-common
+    container_name: flash-sale-sales-db
+    environment:
+      POSTGRES_USER: flashsale
+      POSTGRES_PASSWORD: flashsale_dev
+      POSTGRES_DB: sales_db
+      PGDATA: /var/lib/postgresql/data/pgdata
+      # Tune for local dev: reduce WAL overhead
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      - "5432:5432"
+    volumes:
+      - sales-db-data:/var/lib/postgresql/data
+      - ./init-scripts/sales-db:/docker-entrypoint-initdb.d:ro
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - log_min_duration_statement=100
+      - -c
+      # Quoted so Docker passes the full string as a single argv element.
+      # Without quotes, spaces split into separate args and Postgres rejects them.
+      - "log_line_prefix=%t [%p] [%a] user=%u,db=%d"
+    labels:
+      - "com.flashsale.service=sales-db"
+      - "com.flashsale.schema=sales_db"
+
+  inventory-db:
+    <<: *postgres-common
+    container_name: flash-sale-inventory-db
+    environment:
+      POSTGRES_USER: flashsale
+      POSTGRES_PASSWORD: flashsale_dev
+      POSTGRES_DB: inventory_db
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      - "5433:5432"
+    volumes:
+      - inventory-db-data:/var/lib/postgresql/data
+      - ./init-scripts/inventory-db:/docker-entrypoint-initdb.d:ro
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - log_min_duration_statement=100
+      - -c
+      # Higher lock_timeout for the SELECT FOR UPDATE fallback path.
+      # Prevents indefinite blocking under Redis failure.
+      - lock_timeout=5000
+    labels:
+      - "com.flashsale.service=inventory-db"
+      - "com.flashsale.schema=inventory_db"
+
+  orders-db:
+    <<: *postgres-common
+    container_name: flash-sale-orders-db
+    environment:
+      POSTGRES_USER: flashsale
+      POSTGRES_PASSWORD: flashsale_dev
+      POSTGRES_DB: orders_db
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      - "5434:5432"
+    volumes:
+      - orders-db-data:/var/lib/postgresql/data
+      - ./init-scripts/orders-db:/docker-entrypoint-initdb.d:ro
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - log_min_duration_statement=100
+    labels:
+      - "com.flashsale.service=orders-db"
+      - "com.flashsale.schema=orders_db"
+
+  # =========================================================================
+  # REDIS CLUSTER — 6 nodes (3 primary + 3 replica)
+  # =========================================================================
+  # Spec: Redis Cluster, 3 primary shards, 1 replica each.
+  #       allkeys-lru eviction, AOF everysec, 4 GB cap per shard.
+  #       Keyspace notifications enabled (Ex) for reservation expiry callbacks.
+  #
+  # Cluster wiring: redis-cluster-init runs after all 6 nodes are healthy
+  # and creates the cluster using redis-cli --cluster create.
+  #
+  # Port mapping: nodes 1–6 on host ports 7001–7006.
+  # Each node also exposes its cluster bus port (16379 + offset).
+
+  redis-node-1:
+    <<: *redis-node-common
+    container_name: flash-sale-redis-1
+    ports:
+      - "7001:6379"
+      - "17001:16379"
+    volumes:
+      - redis-node-1-data:/data
+      - ./config/redis-node.conf:/usr/local/etc/redis/redis.conf:ro
+    command: >
+      redis-server /usr/local/etc/redis/redis.conf
+      --requirepass ${REDIS_PASSWORD:-redis_dev}
+      --masterauth ${REDIS_PASSWORD:-redis_dev}
+      --cluster-announce-hostname redis-node-1
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+    labels:
+      - "com.flashsale.service=redis"
+      - "com.flashsale.redis.role=primary-candidate"
+
+  redis-node-2:
+    <<: *redis-node-common
+    container_name: flash-sale-redis-2
+    ports:
+      - "7002:6379"
+      - "17002:16379"
+    volumes:
+      - redis-node-2-data:/data
+      - ./config/redis-node.conf:/usr/local/etc/redis/redis.conf:ro
+    command: >
+      redis-server /usr/local/etc/redis/redis.conf
+      --requirepass ${REDIS_PASSWORD:-redis_dev}
+      --masterauth ${REDIS_PASSWORD:-redis_dev}
+      --cluster-announce-hostname redis-node-2
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+
+  redis-node-3:
+    <<: *redis-node-common
+    container_name: flash-sale-redis-3
+    ports:
+      - "7003:6379"
+      - "17003:16379"
+    volumes:
+      - redis-node-3-data:/data
+      - ./config/redis-node.conf:/usr/local/etc/redis/redis.conf:ro
+    command: >
+      redis-server /usr/local/etc/redis/redis.conf
+      --requirepass ${REDIS_PASSWORD:-redis_dev}
+      --masterauth ${REDIS_PASSWORD:-redis_dev}
+      --cluster-announce-hostname redis-node-3
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+
+  redis-node-4:
+    <<: *redis-node-common
+    container_name: flash-sale-redis-4
+    ports:
+      - "7004:6379"
+      - "17004:16379"
+    volumes:
+      - redis-node-4-data:/data
+      - ./config/redis-node.conf:/usr/local/etc/redis/redis.conf:ro
+    command: >
+      redis-server /usr/local/etc/redis/redis.conf
+      --requirepass ${REDIS_PASSWORD:-redis_dev}
+      --masterauth ${REDIS_PASSWORD:-redis_dev}
+      --cluster-announce-hostname redis-node-4
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+
+  redis-node-5:
+    <<: *redis-node-common
+    container_name: flash-sale-redis-5
+    ports:
+      - "7005:6379"
+      - "17005:16379"
+    volumes:
+      - redis-node-5-data:/data
+      - ./config/redis-node.conf:/usr/local/etc/redis/redis.conf:ro
+    command: >
+      redis-server /usr/local/etc/redis/redis.conf
+      --requirepass ${REDIS_PASSWORD:-redis_dev}
+      --masterauth ${REDIS_PASSWORD:-redis_dev}
+      --cluster-announce-hostname redis-node-5
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+
+  redis-node-6:
+    <<: *redis-node-common
+    container_name: flash-sale-redis-6
+    ports:
+      - "7006:6379"
+      - "17006:16379"
+    volumes:
+      - redis-node-6-data:/data
+      - ./config/redis-node.conf:/usr/local/etc/redis/redis.conf:ro
+    command: >
+      redis-server /usr/local/etc/redis/redis.conf
+      --requirepass ${REDIS_PASSWORD:-redis_dev}
+      --masterauth ${REDIS_PASSWORD:-redis_dev}
+      --cluster-announce-hostname redis-node-6
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+
+  # Cluster bootstrap — idempotent.
+  #
+  # Root cause of M1: 'docker compose up' recreates stopped containers on every
+  # invocation. Without an idempotency guard, 'redis-cli --cluster create' runs
+  # against an already-formed cluster, returns "[ERR] Node is not empty", and
+  # exits non-zero — causing a confusing red failure on every subsequent 'make up'.
+  #
+  # Fix: check CLUSTER INFO before attempting creation. If cluster_state is already
+  # 'ok', skip creation entirely and exit 0. This makes the container safe to
+  # run on every 'docker compose up' regardless of volume state.
+  #
+  # restart: "no" prevents Docker from auto-restarting on failure, but does NOT
+  # prevent 'docker compose up' from re-creating a stopped container. The
+  # idempotency guard inside the command is the correct solution.
+  redis-cluster-init:
+    image: redis:7.2.5-alpine
+    container_name: flash-sale-redis-cluster-init
+    restart: "no"
+    networks: [flash-sale-net]
+    depends_on:
+      redis-node-1: { condition: service_healthy }
+      redis-node-2: { condition: service_healthy }
+      redis-node-3: { condition: service_healthy }
+      redis-node-4: { condition: service_healthy }
+      redis-node-5: { condition: service_healthy }
+      redis-node-6: { condition: service_healthy }
+    command: >
+      sh -c "
+        echo 'Checking Redis Cluster state...'
+
+        CLUSTER_STATE=$$(redis-cli \
+          -a ${REDIS_PASSWORD:-redis_dev} \
+          --no-auth-warning \
+          -h redis-node-1 -p 6379 \
+          CLUSTER INFO 2>/dev/null | grep cluster_state | cut -d: -f2 | tr -d '[:space:]')
+
+        if [ "$$CLUSTER_STATE" = 'ok' ]; then
+          echo 'Cluster already formed (cluster_state:ok). Skipping creation.'
+          echo 'Verifying node count...'
+          redis-cli \
+            -a ${REDIS_PASSWORD:-redis_dev} \
+            --no-auth-warning \
+            -h redis-node-1 -p 6379 \
+            CLUSTER INFO | grep -E 'cluster_state|cluster_known_nodes|cluster_size'
+          exit 0
+        fi
+
+        echo 'No existing cluster detected. Creating cluster (3 primary + 3 replica)...'
+        redis-cli \
+          -a ${REDIS_PASSWORD:-redis_dev} \
+          --no-auth-warning \
+          --cluster create \
+            redis-node-1:6379 \
+            redis-node-2:6379 \
+            redis-node-3:6379 \
+            redis-node-4:6379 \
+            redis-node-5:6379 \
+            redis-node-6:6379 \
+          --cluster-replicas 1 \
+          --cluster-yes
+
+        echo 'Cluster created. Verifying...'
+        redis-cli \
+          -a ${REDIS_PASSWORD:-redis_dev} \
+          --no-auth-warning \
+          -h redis-node-1 -p 6379 \
+          CLUSTER INFO | grep -E 'cluster_state|cluster_known_nodes|cluster_size'
+        echo 'Redis Cluster ready.'
+      "
+
+  # =========================================================================
+  # KAFKA — KRaft mode (no Zookeeper), single broker for local dev
+  # =========================================================================
+  # Spec: Kafka 3.x KRaft.
+  # Topics created by services on startup via KafkaTopicConfig @Bean.
+  # KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=false — services own their topics.
+  #
+  # Two listeners:
+  #   INTERNAL://kafka:29092  — service-to-Kafka inside docker network
+  #   EXTERNAL://localhost:9092 — host machine access (Kafka UI, local tests)
+
+  kafka:
+    image: bitnami/kafka:3.7.0
+    container_name: flash-sale-kafka
+    restart: unless-stopped
+    networks: [flash-sale-net]
+    ports:
+      - "9092:9092"     # External: localhost access
+      - "9093:9093"     # KRaft controller port (internal)
+    environment:
+      # --- KRaft: no Zookeeper ---
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+
+      # --- Listeners ---
+      # INTERNAL: services inside docker network connect on port 29092
+      # EXTERNAL: host machine connects on port 9092
+      KAFKA_CFG_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # --- Replication: 1 broker in dev, so replication factor = 1 ---
+      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_CFG_MIN_INSYNC_REPLICAS: 1
+
+      # --- Topics: services create their own; no auto-create ---
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+      # --- Performance tuning for local dev ---
+      KAFKA_CFG_LOG_RETENTION_HOURS: 24          # Short retention in dev
+      KAFKA_CFG_LOG_SEGMENT_BYTES: 104857600      # 100 MB segments
+      KAFKA_CFG_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+      KAFKA_CFG_NUM_PARTITIONS: 1                 # Default; services override per topic
+      KAFKA_CFG_COMPRESSION_TYPE: lz4
+
+      # --- Producer idempotency support ---
+      KAFKA_CFG_ENABLE_IDEMPOTENCE: "true"
+
+      # --- JVM heap ---
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms256m"
+
+      # --- KRaft cluster ID (must be stable; generated once) ---
+      KAFKA_KRAFT_CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qg==
+
+    volumes:
+      - kafka-data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL",
+             "kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+    labels:
+      - "com.flashsale.service=kafka"
+
+  # =========================================================================
+  # CLICKHOUSE — analytics store for AnalyticsService
+  # =========================================================================
+  # Spec: ClickHouse for columnar analytics — OLAP, not OLTP.
+  #       sale_events wide table; batch inserts from AnalyticsService.
+  # Port 8123: HTTP interface (used by JDBC driver)
+  # Port 9000: native TCP interface
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3.3-alpine
+    container_name: flash-sale-clickhouse
+    restart: unless-stopped
+    networks: [flash-sale-net]
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # Native TCP
+    environment:
+      CLICKHOUSE_USER: flashsale
+      CLICKHOUSE_PASSWORD: flashsale_dev
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+      - ./init-scripts/clickhouse:/docker-entrypoint-initdb.d:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL",
+             "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    labels:
+      - "com.flashsale.service=clickhouse"
+
+  # =========================================================================
+  # TOOLING — observability and admin UIs (dev only, not in production)
+  # =========================================================================
+
+  # Kafka UI — browse topics, consumer groups, consumer lag
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: flash-sale-kafka-ui
+    restart: unless-stopped
+    networks: [flash-sale-net]
+    ports:
+      - "18080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local-flash-sale
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_READONLY: "false"
+      # Show consumer group lag — key metric from NFR-027
+      KAFKA_CLUSTERS_0_METRICS_PORT: 9092
+      DYNAMIC_CONFIG_ENABLED: "true"
+      AUTH_TYPE: disabled           # Dev only — no auth
+    depends_on:
+      kafka: { condition: service_healthy }
+    labels:
+      - "com.flashsale.service=kafka-ui"
+      - "com.flashsale.env=dev-only"
+
+  # RedisInsight — Redis cluster browser and key inspector
+  # Useful for watching stock:{saleId} drain during load tests
+  redisinsight:
+    image: redislabs/redisinsight:2.50
+    container_name: flash-sale-redisinsight
+    restart: unless-stopped
+    networks: [flash-sale-net]
+    ports:
+      - "18081:5540"
+    depends_on:
+      redis-node-1: { condition: service_healthy }
+    labels:
+      - "com.flashsale.service=redisinsight"
+      - "com.flashsale.env=dev-only"
