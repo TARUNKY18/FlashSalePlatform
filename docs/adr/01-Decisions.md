@@ -428,5 +428,251 @@ All future service addition proposals must be evaluated against the split criter
 
 ---
 
-*All 15 decisions extracted from Final-Spec-Council.md v2.0.*
-*Next: generate service skeletons → integration tests for saga flow → Lua script with property-based tests.*
+# Decision 016
+**Title:** Redis Cluster — Topology, Persistence, and Eviction Policy
+**Status:** Approved
+**Date:** 2026-06-17
+**Deciders:** Staff Engineer Council
+
+## Context
+
+The Flash Sale Platform requires a caching layer that can handle atomic stock
+decrements at 50,000 concurrent requests, serve the `GET /active` hot path without
+touching Postgres, enforce per-user rate limits, and cache idempotency keys across
+service restarts. These four workloads have fundamentally different data structures,
+access patterns, and failure modes. A single Redis node is a single point of failure.
+The platform targets P99 reservation latency of ≤ 50ms — any Redis topology that
+adds routing overhead or introduces failover delay must be evaluated against this SLA.
+
+## Decision
+
+Deploy Redis in Cluster mode: **3 primary shards, 1 replica per shard, 6 nodes total**.
+
+Key topology decisions:
+- **Sharding:** Hash-slot based automatic sharding via `CRC16(key) % 16384`
+- **Co-location:** Hash tags `{saleId}` force related keys onto the same shard, enabling multi-key Lua scripts
+- **Eviction:** `allkeys-lru` — evicts least-recently-used keys across all keyspaces when memory cap is reached
+- **Persistence:** AOF `appendfsync everysec` — maximum 1 second data loss; Redis is never the source of truth so full durability is not required
+- **Memory cap:** 4 GB per shard in production; `maxmemory-samples 10` for LRU approximation accuracy
+- **Keyspace notifications:** `Ex` enabled — required for reservation expiry callbacks without polling
+
+## Consequences
+
+**Positive:**
+- Horizontal scale: adding shards increases throughput linearly
+- Automatic failover: replica promotes to primary within `cluster-node-timeout` (5 seconds) on primary failure
+- Lua atomicity preserved: hash tags guarantee multi-key scripts land on one shard
+- Hot key isolation: `stock:{saleId}` for one sale does not share a shard partition with another sale's stock counter (key hash distributes across shards)
+- `allkeys-lru` protects hot keys automatically — active sale keys are accessed frequently and are last to be evicted
+
+**Negative:**
+- Multi-shard Lua scripts require hash tag discipline; a missing `{}` tag silently routes keys to different shards and causes `CROSSSLOT` errors
+- Cluster mode adds 16ms–30ms for initial topology discovery on client connection; mitigated by connection pooling
+- `cluster-node-timeout 5000ms` triggers false failovers on laptop hibernate/wake; development-specific risk
+
+## Alternatives Rejected
+
+**Redis Sentinel (single primary + replicas):** Provides high availability but no horizontal sharding. Single primary becomes the bottleneck under 50k concurrent DECR operations. Rejected: cannot meet throughput target.
+
+**Redis standalone (single node):** Zero operational overhead. Acceptable for development. Rejected for production: single point of failure; no scale-out path; stock counter DECR throughput bounded by single-threaded Redis command processing.
+
+**Redis Enterprise Cluster:** Fully managed, active-active geo-replication, automatic resharding. Rejected: cost and vendor lock-in not justified for a self-hosted portfolio project.
+
+**Multiple standalone Redis instances (one per layer):** Eliminates cross-layer interference. Rejected: operational overhead triples; keyspace naming conventions within a single cluster achieve equivalent logical isolation at lower cost.
+
+---
+
+# Decision 017
+**Title:** Kafka — Event-Driven Architecture, KRaft Mode, Topic Ownership
+**Status:** Approved
+**Date:** 2026-06-17
+**Deciders:** Staff Engineer Council
+
+## Context
+
+Five services need to communicate state changes without creating synchronous coupling.
+The flash sale reservation path processes up to 50,000 concurrent requests. A
+notification failure or analytics lag must not affect reservation throughput. Services
+must be independently deployable and independently scalable. Events must be durable
+and replayable for recovery and debugging. The team rejected Zookeeper due to
+operational complexity — a Kafka deployment requiring a separate Zookeeper ensemble
+is a deployment bottleneck and a second system to operate.
+
+## Decision
+
+**Apache Kafka 3.7.0 in KRaft mode** (no Zookeeper) as the sole inter-service
+asynchronous communication mechanism.
+
+Binding rules:
+1. Kafka is **async fan-out only** — never used as synchronous RPC
+2. A service needing an immediate answer calls an HTTP endpoint
+3. A service notifying others of a state change publishes an event
+4. `AUTO_CREATE_TOPICS_ENABLE=false` — every topic is explicitly owned by a service and created via `KafkaTopicConfig @Bean`
+5. `enable.auto.commit=false` on all consumers — offsets committed only after successful processing
+6. Producer config: `acks=all`, `enable-idempotence=true` — no message loss on broker failover
+
+**Topic ownership:**
+
+| Topic | Producer | Key | Consumer groups |
+|---|---|---|---|
+| `sale-events` | SaleService | `saleId` | notification, analytics |
+| `inventory-events` | InventoryService | `productId` | order, notification, analytics |
+| `order-events` | OrderService | `saleId` | notification, analytics |
+| `notifications.dlq` | NotificationService | none | ops replay tool |
+| `analytics.dlq` | AnalyticsService | none | ops replay tool |
+
+## Consequences
+
+**Positive:**
+- Temporal decoupling: a slow NotificationService does not block reservation creation
+- Durability: events persist for 3–7 days; full replay from any offset
+- Independent scaling: each consumer group scales its pod count to its partition count
+- KRaft eliminates Zookeeper: one fewer system to operate, monitor, and back up
+- `productId` partition key on `inventory-events` preserves per-product ordering for saga correctness (see ADR-007)
+
+**Negative:**
+- Eventual consistency: OrderService learns about a reservation via Kafka event, not synchronously — adds latency to the confirmation path
+- Harder end-to-end tracing: distributed tracing (traceId in Kafka headers) is required to correlate flows across topic boundaries
+- At-least-once delivery: idempotent consumers are mandatory; `eventId` deduplication required at every consumer
+
+## Alternatives Rejected
+
+**RabbitMQ:** Mature, well-understood. Rejected: weaker ordering guarantees per partition; no native log compaction; consumer group semantics require plugins; less suitable for high-throughput event replay.
+
+**gRPC / synchronous HTTP for all communication:** Familiar programming model. Rejected: tight temporal coupling; a slow downstream service degrades the entire reservation path; no replay capability; notification failures would block order creation.
+
+**AWS SQS/SNS:** Fully managed, no operational overhead. Rejected: vendor lock-in; limited partition ordering guarantees; no offset-based replay without custom infrastructure.
+
+**Kafka with Zookeeper:** Proven, supported in older environments. Rejected: Zookeeper adds a second distributed system to operate; KRaft is stable in Kafka 3.x and is the strategic direction for all new Kafka deployments.
+
+---
+
+# Decision 018
+**Title:** ClickHouse — Analytics Storage Engine
+**Status:** Approved
+**Date:** 2026-06-17
+**Deciders:** Staff Engineer Council
+
+## Context
+
+The Flash Sale Platform generates high-volume event data: every reservation, order,
+sale start, and sale end produces a Kafka event. Product and business teams need
+real-time analytics: reservations per second during a sale, per-product sell-through
+rate, order conversion funnel, and time-series throughput graphs. These are columnar
+aggregation workloads — scanning millions of rows, grouping by dimensions, computing
+sums and counts. Running them on the same PostgreSQL instance as OLTP is a known
+production incident pattern: a single analytical query can pin I/O, degrade
+transactional latency, and trigger cascading failures under sale load.
+
+## Decision
+
+**ClickHouse 24.3** as the dedicated analytics storage engine for AnalyticsService.
+
+Schema design:
+- `sale_events` MergeTree table: wide columnar schema, one row per Kafka event
+- Partitioned by `toYYYYMM(occurred_at)` — efficient time-range pruning
+- Ordered by `(sale_id, occurred_at, event_id)` — covers the most common query patterns
+- Bloom filter skip indexes on `sale_id` and `event_type` — sub-linear lookup for point queries
+- 90-day TTL — automatic data expiry without manual cleanup jobs
+
+AnalyticsService behaviour:
+- Consumes all three Kafka topics via a single consumer group
+- Writes to ClickHouse in micro-batches: flush every 1,000 events **or** 1 second, whichever first
+- Analytics lag target: < 5 seconds end-to-end (Kafka publish → ClickHouse queryable)
+- Zero coupling to the transactional path — AnalyticsService can be stopped without affecting reservation or order creation
+
+## Consequences
+
+**Positive:**
+- Sub-second aggregation queries on 10M+ rows — ClickHouse MergeTree vectorized execution
+- Insert throughput: 100k+ rows/second per node — micro-batch writes have no backpressure risk
+- OLTP isolation: analytical query load never touches `sales_db`, `inventory_db`, or `orders_db`
+- Columnar compression: LZ4 by default — `sale_events` with 10M rows typically compresses to < 500 MB
+- Native Kafka integration path: ClickHouse has a Kafka table engine for future direct ingestion
+
+**Negative:**
+- ClickHouse is not ACID — it is an eventually-consistent columnar store; not suitable for transactional writes
+- `ALTER TABLE` operations on MergeTree tables are async and non-blocking but can be slow on large tables
+- Joining ClickHouse data with Postgres data requires application-level joins or a separate data pipeline
+
+## Alternatives Rejected
+
+**PostgreSQL with partitioned tables:** Familiar operational model. Rejected: columnar aggregation on millions of rows saturates Postgres I/O; `VACUUM` and `ANALYZE` overhead increases with write volume; cannot share instances with OLTP without I/O contention risk.
+
+**Elasticsearch:** Excellent for full-text search and log analytics. Rejected: not optimised for aggregate metrics workloads (`GROUP BY`, `SUM`, time-series); higher memory overhead per node; operational complexity (index management, shard allocation) exceeds the analytics requirements.
+
+**Apache Druid:** Purpose-built for real-time OLAP. Rejected: significantly more complex to operate (multiple node types: broker, coordinator, historical, middleManager); overkill for a single-node analytics requirement at this scale.
+
+**BigQuery / Redshift (cloud-managed):** Zero operational overhead, infinite scale. Rejected: introduces cloud vendor dependency; adds network egress latency to the ingestion pipeline; cost unpredictability under variable event volume.
+
+---
+
+# Decision 019
+**Title:** PostgreSQL — Database-per-Service with Isolated Instances
+**Status:** Approved
+**Date:** 2026-06-17
+**Deciders:** Staff Engineer Council
+
+## Context
+
+Three transactional services — SaleService, InventoryService, OrderService — each
+own a distinct bounded context with different schema evolution rates, query patterns,
+and scaling profiles. The SaleService schema changes infrequently (sale lifecycle is
+stable). The InventoryService `stock_levels` and `reservations` tables are the
+highest-write tables in the system — every reservation hits `stock_levels`. The
+OrderService `order_outbox` table is polled every 500ms by the outbox poller. These
+three workloads have different indexing requirements, connection pool sizes, and
+backup SLAs. The architectural question is whether to isolate them at the schema
+level (one Postgres instance, three schemas) or the instance level (three separate
+Postgres instances).
+
+## Decision
+
+**Three separate PostgreSQL 16 instances**, one per transactional service. No shared
+Postgres infrastructure between bounded contexts.
+
+Instance assignments:
+
+| Instance | Port | Owner | High-write tables |
+|---|---|---|---|
+| `sales_db` | 5432 | SaleService | `sale_status_history` |
+| `inventory_db` | 5433 | InventoryService | `stock_levels`, `reservations`, `stock_reservation_log` |
+| `orders_db` | 5434 | OrderService | `orders`, `order_outbox`, `idempotency_keys` |
+
+Per-instance tuning applied:
+- `inventory_db`: `lock_timeout=5000ms` — caps `SELECT FOR UPDATE` wait time when the Redis fallback path is active under high concurrency
+- All instances: `pg_stat_statements` extension — slow query monitoring without external APM
+- All instances: `log_min_duration_statement=100ms` — surface queries exceeding the P99 latency budget
+- All instances: `--data-checksums` flag — storage corruption detection on first init
+
+Cross-service data access rule: **prohibited at the database level**. Cross-service data flows exclusively through Kafka events (async) or HTTP read APIs (sync, user-facing only).
+
+## Consequences
+
+**Positive:**
+- Failure isolation: a `sales_db` outage does not affect `inventory_db` or `orders_db`
+- Independent scaling: `inventory_db` can be given more IOPS, memory, and connections than `sales_db` without affecting other services
+- Independent schema evolution: InventoryService can add a column to `reservations` without coordination with other teams
+- Incident scoping: a slow query alert on `inventory_db` pages the Inventory team only — no ambiguity about ownership
+- Connection pool isolation: an `orders_db` connection pool exhaustion does not starve `inventory_db` connections
+
+**Negative:**
+- No cross-service joins at the database level — ever. All cross-service queries require application-level assembly or Kafka-based denormalization
+- Three Postgres instances to operate, monitor, back up, and upgrade
+- Three separate Flyway migration histories to manage
+
+## Alternatives Rejected
+
+**Single PostgreSQL instance, schema-per-service:** Familiar pattern, lower operational overhead. Rejected: one runaway query (e.g., a missing index on `reservations`) can saturate shared I/O and degrade all three services simultaneously. Connection pool is shared — a connection leak in OrderService can starve InventoryService. Schema isolation without instance isolation provides weaker failure isolation guarantees.
+
+**Single PostgreSQL instance, no schema separation:** Lowest operational overhead, simplest local development. Rejected: no boundary enforcement; accidental cross-service joins become possible and gradually appear; schema ownership erodes over time.
+
+**CockroachDB (distributed SQL):** Horizontal scale, strong consistency, cloud-native. Rejected: significantly more complex to operate; higher latency per query due to consensus overhead; overkill for a system where read replicas on Postgres achieve the required read throughput.
+
+**PlanetScale (MySQL, serverless):** Managed, automatic scaling, branching. Rejected: MySQL dialect diverges from Postgres in important ways (partial indexes, advisory locks, `FOR UPDATE SKIP LOCKED`); vendor lock-in; `FOR UPDATE SKIP LOCKED` required by the outbox poller is not available in all MySQL versions.
+
+---
+
+*Decisions 001–015 extracted from Final-Spec-Council.md v2.0.*
+*Decisions 016–019 added 2026-06-17, formalising infrastructure choices made during Week 1.*
+*Next decisions expected: ADR-020 (Flyway migration strategy), ADR-021 (Spring Boot hexagonal architecture package structure).*
