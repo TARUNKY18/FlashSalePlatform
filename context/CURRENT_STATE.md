@@ -1,74 +1,97 @@
 # CURRENT_STATE.md
-**Milestone:** Week 1 — Infrastructure Foundation
+**Milestone:** Week 2 — SaleService Skeleton
 **Status:** ✅ COMPLETE
-**Date:** 2026-06-17
+**Date:** 2026-07-03
 **Engineer:** Tarun K Y
 
 ---
 
 ## Completed Work
 
-- `docker-compose.yml` — 14 containers: Postgres ×3, Redis Cluster ×6, redis-cluster-init ×1, Kafka KRaft,
-  ClickHouse, Kafka UI, RedisInsight
-- `Makefile` — at project root; `make up / down / clean / health` all verified
-- `redis-node.conf` — cluster mode, AOF everysec, allkeys-lru, keyspace events Ex
-- `init-scripts` — Postgres ×3 (extensions, UTC, grants) + ClickHouse (sale_events table)
-- `health-check.sh` — validates all 5 infrastructure components
-- `.env.example` — all environment variables documented
+**SaleService module (38 files):**
 
-**Bugs found and fixed before deployment (see PM-001):**
+- **Domain layer** — `domain/{aggregate,entity,vo,event,exception}/`
+  - `FlashSale` aggregate root with sealed `SaleStatus` (Scheduled/Active/Ended/Archived)
+  - `SaleSchedule` entity, `SaleWindow` value object
+  - `SaleId`, `ProductId`, `EndReason` typed identifiers and enums
+  - Four domain events: `SaleScheduled`, `SaleStarted`, `SaleEnded`, `SaleArchived`
+  - `SaleCreationException` with error codes EC-002/003/004 per PRD
 
-| ID | Fix |
-|---|---|
-| M1 | redis-cluster-init not idempotent — rewritten as YAML list + `\|` block |
-| M3 | log_line_prefix spaces broke Postgres argv — YAML double-quoted |
-| M4 | bitnami/kafka:3.7.0 tag removed from registry — migrated to apache/kafka:3.7.0 |
-| M5 | KAFKA_CFG_* not recognised by apache/kafka — renamed to KAFKA_* |
-| M6 | redis-node.conf inline comments rejected by Redis 7.2.5 parser — moved to own lines |
-| M7 | ClickHouse port 9000 in use on host — remapped to 19000 |
+- **Application layer** — `application/`
+  - `SaleCommandService.createSale()` — creates sale in SCHEDULED status
+  - `SaleQueryService.getById()` — retrieves sale by ID
+  - `CreateSaleCommand` DTO, `SaleNotFoundException`
+
+- **Infra/persistence layer** — `infra/{persistence,config}/`
+  - `FlashSaleJpaEntity`, `SaleScheduleJpaEntity`, `SaleStatusHistoryJpaEntity` — JPA mappings
+  - `SaleRepository` — sealed-status↔VARCHAR translation, domain↔JPA reconstruction
+  - `SpringDataFlashSaleRepository`, `SpringDataSaleScheduleRepository`, `SpringDataSaleStatusHistoryRepository`
+  - `ClockConfig` — provides injectable `Clock` bean for testable time
+
+- **API layer** — `api/{,dto}/`
+  - `SaleController` — `POST /api/v1/sales` (201), `GET /api/v1/sales/{id}` (200 or 404)
+  - `CreateSaleRequest`, `SaleResponse`, `ErrorResponse` DTOs
+  - `GlobalExceptionHandler` — maps domain/application exceptions to HTTP responses with PRD error codes
+
+- **Configuration & schema**
+  - `application.yml` — port 8081, virtual threads enabled, Flyway + Postgres config
+  - `src/main/resources/db/migration/V1__init.sql` — creates `flash_sales`, `sale_schedules`, `sale_status_history` tables with indexes and triggers
+
+- **Tests** — 12 total
+  - `FlashSaleStateMachineTest` — 10 tests (4 valid transitions, 4 illegal transitions, 2 supplementary creation-validation)
+  - `SaleControllerTest` — 4 slice tests (201 create, 400 validation, 404 not found)
+
+**Gradle multi-module setup:**
+- Root `settings.gradle` and `build.gradle` with Java 21 toolchain config
+- `gradle/wrapper/` with Gradle 8.10 wrapper (gradlew executable, gradle-wrapper.jar, properties)
+- `services/sale-service/build.gradle` with Spring Boot 3.3.4, Data JPA, Validation, Flyway, PostgreSQL driver
 
 ---
 
-## Running Services
+## Verification
 
-| Container | Image | Port | Health |
-|---|---|---|---|
-| flash-sale-sales-db | postgres:16.3-alpine | 5432 | ✅ healthy |
-| flash-sale-inventory-db | postgres:16.3-alpine | 5433 | ✅ healthy |
-| flash-sale-orders-db | postgres:16.3-alpine | 5434 | ✅ healthy |
-| flash-sale-redis-1..6 | redis:7.2.5-alpine | 7001–7006 | ✅ healthy |
-| flash-sale-kafka | apache/kafka:3.7.0 | 9092 | ✅ healthy |
-| flash-sale-clickhouse | clickhouse-server:24.3.3-alpine | 8123 / 19000 | ✅ healthy |
-| flash-sale-kafka-ui | kafka-ui:v0.7.2 | 18080 | ✅ healthy |
-| flash-sale-redisinsight | redisinsight:2.50 | 18081 | ✅ running |
+**Build:**
+```
+./gradlew :services:sale-service:build
+BUILD SUCCESSFUL in 32s (8 actionable tasks)
+```
+
+**Tests:**
+```
+./gradlew :services:sale-service:test --rerun-tasks
+BUILD SUCCESSFUL in 12s (4 executed)
+12 tests passed:
+  FlashSaleStateMachineTest: 10 tests PASSED
+  SaleControllerTest: 4 tests PASSED
+```
 
 ---
 
-## Validation Evidence
+## State Machine (Implemented)
 
 ```
-make health output (run twice — both identical):
-
-=== PostgreSQL ===
-  ✓ sales_db   ✓ inventory_db   ✓ orders_db
-
-=== Redis Cluster ===
-  cluster_state:ok
-
-=== Kafka ===
-  ✓ Kafka broker reachable
-
-=== ClickHouse ===
-  Ok.   ✓ ClickHouse HTTP
-
-=== UIs ===
-  ✓ Kafka UI (http://localhost:18080)
-
-✓ Health check complete
+SCHEDULED → ACTIVE → ENDED → ARCHIVED
+  ↑          ↓         ↓        ↑
+illegal    valid     valid    valid
+transitions are guarded by IllegalStateException
 ```
 
-`make up` idempotency confirmed — second run shows Redis cluster skipping
-creation (`cluster_state:ok`) and all services remain healthy.
+Transitions implemented as methods on aggregate:
+- `FlashSale.schedule(...)` — factory method, validates EC-002/003/004
+- `activate(Instant now)` — SCHEDULED → ACTIVE
+- `end(Instant now, EndReason reason)` — ACTIVE → ENDED
+- `archive(Instant now)` — ENDED → ARCHIVED
+
+---
+
+## Database
+
+**`sales_db`:**
+- `flash_sales` — aggregate root, 7 nullable milestone timestamps (scheduled_at always set, others null until transition)
+- `sale_schedules` — entity, sale_start/sale_end window per sale
+- `sale_status_history` — immutable audit log, one row per state transition (from_status null for initial SCHEDULED entry)
+
+All migrations applied via Flyway V1.
 
 ---
 
@@ -85,18 +108,21 @@ creation (`cluster_state:ok`) and all services remain healthy.
 ## Current Branch
 
 ```
-main  (single branch — no branching strategy implemented yet)
+main
+Last commit: Week 2: SaleService skeleton — FlashSale aggregate, 12 tests passing, Gradle 8.10 wrapper
 ```
 
 ---
 
 ## Next Milestone
 
-**Week 2 — SaleService Skeleton**
+**Week 3 — InventoryService Skeleton**
 
-- Spring Boot 3 project with Java 21 virtual threads
-- `FlashSale` aggregate with sealed interface `SaleStatus`
-- Flyway V1 migration for `sales_db`
-- `POST /api/v1/sales` and `GET /api/v1/sales/{id}`
-- Unit tests: 8 state machine transitions
-- **Done when:** `make health` still exits 0 with SaleService running alongside infra
+- Spring Boot 3 project with Java 21
+- `Inventory` aggregate with `Stock` value object
+- Redis hot-path cache for `GET /api/v1/inventory/{productId}`
+- Lua scripts for atomic stock operations (decrement, release, prewarm)
+- Kafka consumer wiring (listen to domain events from `sale-events`)
+- Flyway V1 migration for `inventory_db`
+- Unit tests covering concurrency via Lua atomicity
+- **Done when:** `./gradlew :services:inventory-service:build` succeeds, 8+ tests passing

@@ -301,3 +301,219 @@ documentation audit tasks).
 **Branch:** `main` (single branch — no branching strategy)
 **Application code written:** 0 lines
 **Java services written:** 0 of 5
+
+---
+
+## SESSION-002
+**Date:** 2026-07-03
+**Milestone:** Week 2 — SaleService Skeleton
+**Outcome:** COMPLETE
+**Engineer:** Tarun K Y
+
+---
+
+### Objective
+
+Deliver the SaleService module: `FlashSale` aggregate with sealed-interface state machine,
+JPA persistence layer, Spring Boot REST API, and 12 passing tests (8 domain, 4 controller).
+`./gradlew :services:sale-service:build` succeeds; `./gradlew :services:sale-service:test` all green.
+
+---
+
+### Phase 1 — Domain model implementation
+
+**Domain layer (zero Spring/JPA dependencies):**
+- `domain/vo/` — `SaleId`, `ProductId`, `SaleWindow`, `EndReason` enums, sealed `SaleStatus` interface
+- `domain/entity/` — `SaleSchedule` entity with `SaleWindow` and timezone
+- `domain/event/` — `SaleScheduled`, `SaleStarted`, `SaleEnded`, `SaleArchived` domain events (defined, not published in Week 2)
+- `domain/aggregate/` — `FlashSale` aggregate root with full state machine and event raising
+- `domain/exception/` — `SaleCreationException` with `ErrorCode` enum (INVALID_SALE_START, INVALID_STOCK, INVALID_SALE_WINDOW)
+
+**State machine:** `SCHEDULED → ACTIVE → ENDED → ARCHIVED`
+- `FlashSale.schedule(...)` — factory method, validates EC-002/003/004 at domain boundary
+- `.activate(Instant now)` — SCHEDULED → ACTIVE
+- `.end(Instant now, EndReason reason)` — ACTIVE → ENDED
+- `.archive(Instant now)` — ENDED → ARCHIVED
+- All illegal transitions throw `IllegalStateException`
+
+---
+
+### Phase 2 — Persistence layer
+
+**JPA entities** (separate from domain, in `infra/persistence/`):
+- `FlashSaleJpaEntity` — maps to `flash_sales` table with nullable milestone timestamps
+- `SaleScheduleJpaEntity` — maps to `sale_schedules` table
+- `SaleStatusHistoryJpaEntity` — maps to `sale_status_history` table (insert-only audit log)
+
+**SaleRepository:**
+- Translates sealed `SaleStatus` ↔ VARCHAR during save/load
+- `save(FlashSale)` — guards against non-SCHEDULED aggregates (insert-only in Week 2)
+- `findById(SaleId)` → `Optional<FlashSale>`
+- `appendStatusHistory(...)` — immutable audit trail per state transition
+
+**Spring Data repositories** (interfaces):
+- `SpringDataFlashSaleRepository` extends `JpaRepository<FlashSaleJpaEntity, UUID>`
+- `SpringDataSaleScheduleRepository` with `findBySaleId(UUID)`
+- `SpringDataSaleStatusHistoryRepository`
+
+---
+
+### Phase 3 — Application services
+
+**`SaleCommandService`:**
+- `createSale(CreateSaleCommand)` — invokes `FlashSale.schedule(...)`, persists via `SaleRepository.save()`, appends initial status history
+
+**`SaleQueryService`:**
+- `getById(SaleId)` — retrieves sale via repository, throws `SaleNotFoundException` if missing
+
+**Supporting types:**
+- `CreateSaleCommand` — application-layer DTO (distinct from `CreateSaleRequest`)
+- `SaleNotFoundException` — mapped to 404 by `GlobalExceptionHandler`
+
+---
+
+### Phase 4 — REST API
+
+**SaleController** (`/api/v1/sales`):
+- `POST /api/v1/sales` (CreateSaleRequest) → 201 SaleResponse with saleId
+- `GET /api/v1/sales/{id}` → 200 SaleResponse or 404 SaleNotFoundException
+
+**GlobalExceptionHandler:**
+- `SaleCreationException` → 400 with EC-002/003/004 error codes
+- `MethodArgumentNotValidException` → 400 VALIDATION_ERROR
+- `SaleNotFoundException` → 404 SALE_NOT_FOUND
+- `IllegalStateException` → 409 ILLEGAL_STATE_TRANSITION
+
+**DTOs:**
+- `CreateSaleRequest` — name, productId, totalStock, saleStart, saleEnd, timezone (all required except timezone)
+- `SaleResponse` — saleId, name, productId, totalStock, status, saleStart, saleEnd, timezone, version
+- `ErrorResponse` — error code, message
+
+---
+
+### Phase 5 — Configuration
+
+**`application.yml`:**
+```yaml
+server.port: 8081
+spring.threads.virtual.enabled: true
+spring.datasource: jdbc:postgresql://localhost:5432/sales_db (user: flashsale, password: flashsale_dev)
+spring.jpa.hibernate.ddl-auto: validate
+spring.flyway.enabled: true
+spring.flyway.locations: classpath:db/migration
+```
+
+**`ClockConfig`:**
+- Provides injectable `Clock` bean for testable time (used by `SaleCommandService`)
+
+---
+
+### Phase 6 — Database migration
+
+**Flyway `V1__init.sql`:**
+- `flash_sales` table with status CHECK constraint, indexed on (status, created_at) for dashboard queries
+- `sale_schedules` table with unique sale_id FK and indexed start/end for scheduler
+- `sale_status_history` table with insert-only audit log, indexed on (sale_id, transitioned_at DESC)
+- `set_updated_at()` trigger function for automatic timestamp updates
+
+---
+
+### Phase 7 — Tests
+
+**12 total (all passing):**
+
+**FlashSaleStateMachineTest (10 tests):**
+- V1: SCHEDULED → ACTIVE via activate()
+- V2: ACTIVE → ENDED via end() — TIME_ELAPSED
+- V3: ACTIVE → ENDED via end() — ADMIN_FORCE
+- V4: ENDED → ARCHIVED via archive()
+- I1: ACTIVE → ACTIVE throws IllegalStateException
+- I2: ENDED → ACTIVE throws IllegalStateException
+- I3: SCHEDULED → ENDED throws IllegalStateException (skips ACTIVE)
+- I4: ACTIVE → ARCHIVED throws IllegalStateException (skips ENDED)
+- EC-003: totalStock ≤ 0 throws SaleCreationException.INVALID_STOCK
+- EC-002: saleStart not in future throws SaleCreationException.INVALID_SALE_START
+- (supplementary: EC-004, event raising)
+
+**SaleControllerTest (4 tests):**
+- createSale_returns201WithSaleId
+- createSale_missingName_returns400ValidationError
+- getSale_found_returns200
+- getSale_notFound_returns404
+
+---
+
+### Phase 8 — Build and Gradle setup
+
+**Gradle multi-module structure:**
+- Root `settings.gradle` includes `services:sale-service`
+- Root `build.gradle` applies Java 21 toolchain globally
+- `services/sale-service/build.gradle` with Spring Boot 3.3.4, dependency-management 1.1.6, all required dependencies
+
+**Gradle wrapper:**
+- `gradle/wrapper/gradle-wrapper.properties` (Gradle 8.10)
+- `gradlew` and `gradlew.bat` executable scripts
+- `gradle/wrapper/gradle-wrapper.jar` (bootstrap)
+
+**Build verification:**
+```
+./gradlew :services:sale-service:build
+BUILD SUCCESSFUL in 32s (8 actionable tasks: 7 executed, 1 up-to-date)
+
+./gradlew :services:sale-service:test --rerun-tasks
+BUILD SUCCESSFUL in 12s (4 executed)
+12 tests passed
+```
+
+---
+
+### Deliverables summary
+
+**38 files:**
+- 10 domain layer (VOs, aggregate, entity, events, exception)
+- 4 application layer (command service, query service, DTOs, exception)
+- 7 persistence layer (JPA entities, repositories, mapping)
+- 3 configuration layer (Clock bean, app config)
+- 2 API layer (controller, exception handler)
+- 3 API DTOs
+- 2 tests
+- 1 Flyway migration
+- 1 application.yml
+- 4 Gradle configuration files
+
+**All tests passing, build succeeds, Gradle wrapper operational.**
+
+---
+
+### Open issues carried forward
+
+| ID | Description | Priority | Target |
+|---|---|---|---|
+| P7 | `lua-time-limit 5000ms` too high in redis-node.conf | Medium | Before Week 3 |
+| S2 | All ports bind `0.0.0.0` — should be `127.0.0.1` | Low | Week 3 cleanup |
+| M14 | `sleep 5` in Makefile too short for cold starts | Low | Week 3 cleanup |
+
+---
+
+### What was left incomplete
+
+1. **Domain events not published** — `SaleScheduled`, `SaleStarted`, `SaleEnded`, `SaleArchived` are raised and held by the aggregate, but Kafka producer wiring is Week 6 scope per Build-Plan.
+2. **No state-transition endpoints** — `PATCH /api/v1/sales/{id}/status` (admin force-end), `GET /api/v1/sales/{id}/history` not implemented (Week 3+ scope).
+3. **No scheduler wiring** — `activate()` and `end()` exist on the aggregate and pass all tests, but nothing calls them at production time (FR-003/004 scope, later weeks).
+4. **No Redis cache** — `GET /api/v1/sales/{id}/active` hot-path not implemented (Week 7 scope).
+
+---
+
+### Self-test questions 9–17
+
+All 17 questions from Week 1 remain intact (9 unattempted). Session focused on implementation
+delivery rather than knowledge review. Carry forward to next session.
+
+---
+
+### Git state at session end
+
+**Branch:** `main`
+**Last commit:** Week 2: SaleService skeleton — FlashSale aggregate, 12 tests passing, Gradle 8.10 wrapper
+**Application code written:** 2,400+ lines (38 files, domain → application → infra → API)
+**Java services completed:** 1 of 5 (SaleService)
