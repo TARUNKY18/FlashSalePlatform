@@ -2,6 +2,7 @@ Read:
 
 * PROJECT_TRUTH.md
 * CURRENT_STATE.md
+* CONFLICTS.md
 * REPOSITORY_INDEX.md
 
 Task:

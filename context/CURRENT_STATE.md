@@ -8,7 +8,7 @@
 
 ## Completed Work
 
-- `docker-compose.yml` — 17 containers: Postgres ×3, Redis Cluster ×6, Kafka KRaft,
+- `docker-compose.yml` — 14 containers: Postgres ×3, Redis Cluster ×6, redis-cluster-init ×1, Kafka KRaft,
   ClickHouse, Kafka UI, RedisInsight
 - `Makefile` — at project root; `make up / down / clean / health` all verified
 - `redis-node.conf` — cluster mode, AOF everysec, allkeys-lru, keyspace events Ex

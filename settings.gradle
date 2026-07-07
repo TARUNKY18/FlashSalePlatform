@@ -1,0 +1,3 @@
+rootProject.name = 'flash-sale-platform'
+
+include 'services:sale-service'
