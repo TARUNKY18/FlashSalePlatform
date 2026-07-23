@@ -14,7 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
  * exposes no child repository or independent StockLevel write path.
  */
 @Repository
-public class ProductRepository {
+public class ProductRepository
+        implements com.flashsale.inventory.application.port.ProductRepository {
 
     private final SpringDataProductRepository springDataRepository;
     private final ProductPersistenceMapper mapper;
@@ -28,6 +29,7 @@ public class ProductRepository {
     }
 
     @Transactional(readOnly = true)
+    @Override
     public Optional<Product> findById(ProductId productId) {
         Objects.requireNonNull(productId, "productId must not be null");
         return springDataRepository.findById(productId.value())
@@ -38,6 +40,7 @@ public class ProductRepository {
      * Saves the complete aggregate and returns the state after JPA has applied versioning.
      */
     @Transactional
+    @Override
     public Product save(Product product) {
         Objects.requireNonNull(product, "product must not be null");
         ProductJpaEntity saved = springDataRepository.saveAndFlush(
