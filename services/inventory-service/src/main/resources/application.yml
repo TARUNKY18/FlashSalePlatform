@@ -1,0 +1,41 @@
+server:
+  port: ${INVENTORY_SERVICE_PORT:8082}
+
+spring:
+  application:
+    name: inventory-service
+
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    url: ${INVENTORY_SERVICE_DB_URL:jdbc:postgresql://localhost:5433/inventory_db}
+    username: ${INVENTORY_SERVICE_DB_USER:flashsale}
+    password: ${INVENTORY_SERVICE_DB_PASSWORD:flashsale_dev}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+
+  data:
+    redis:
+      password: ${REDIS_PASSWORD:redis_dev}
+      cluster:
+        nodes: ${SPRING_DATA_REDIS_CLUSTER_NODES:localhost:7001,localhost:7002,localhost:7003}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
