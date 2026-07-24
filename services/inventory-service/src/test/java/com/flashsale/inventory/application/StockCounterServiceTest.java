@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -15,6 +16,8 @@ import com.flashsale.inventory.application.port.ProductRepository;
 import com.flashsale.inventory.application.port.StockDecrementPort;
 import com.flashsale.inventory.application.port.StockDecrementUnavailableException;
 import com.flashsale.inventory.application.port.StockFallbackPort;
+import com.flashsale.inventory.application.port.StockRewarmPort;
+import com.flashsale.inventory.application.port.StockRewarmUnavailableException;
 import com.flashsale.inventory.domain.aggregate.Product;
 import com.flashsale.inventory.domain.vo.ProductId;
 import com.flashsale.inventory.domain.vo.SaleId;
@@ -38,11 +41,13 @@ class StockCounterServiceTest {
     private final ProductRepository productRepository = mock(ProductRepository.class);
     private final StockDecrementPort stockDecrementPort = mock(StockDecrementPort.class);
     private final StockFallbackPort stockFallbackPort = mock(StockFallbackPort.class);
+    private final StockRewarmPort stockRewarmPort = mock(StockRewarmPort.class);
     private final StockCounterService service =
             new StockCounterService(
                     productRepository,
                     stockDecrementPort,
-                    stockFallbackPort
+                    stockFallbackPort,
+                    stockRewarmPort
             );
 
     @Test
@@ -59,6 +64,7 @@ class StockCounterServiceTest {
         verify(stockDecrementPort).decrement(SALE_ID, 3);
         verify(productRepository, never()).save(any());
         verifyNoInteractions(stockFallbackPort);
+        verifyNoInteractions(stockRewarmPort);
     }
 
     @Test
@@ -71,6 +77,7 @@ class StockCounterServiceTest {
         assertInstanceOf(StockDecrementResult.SoldOut.class, result);
         verify(productRepository, never()).save(any());
         verifyNoInteractions(stockFallbackPort);
+        verifyNoInteractions(stockRewarmPort);
     }
 
     @Test
@@ -87,6 +94,7 @@ class StockCounterServiceTest {
         assertEquals(StockCount.of(41), decremented.remainingStock());
         verify(stockDecrementPort, times(1)).decrement(SALE_ID, 1);
         verify(stockFallbackPort, times(1)).decrement(PRODUCT_ID, SALE_ID, 1);
+        verify(stockRewarmPort, times(1)).rewarmIfAbsent(SALE_ID, StockCount.of(41));
         verify(productRepository, never()).save(any());
     }
 
@@ -102,6 +110,7 @@ class StockCounterServiceTest {
         assertInstanceOf(StockDecrementResult.SoldOut.class, result);
         verify(stockDecrementPort, times(1)).decrement(SALE_ID, 3);
         verify(stockFallbackPort, times(1)).decrement(PRODUCT_ID, SALE_ID, 3);
+        verifyNoInteractions(stockRewarmPort);
     }
 
     @Test
@@ -122,6 +131,28 @@ class StockCounterServiceTest {
         assertEquals(StockCount.of(38), decremented.remainingStock());
         verify(stockDecrementPort, times(1)).decrement(SALE_ID, 2);
         verify(stockFallbackPort, times(1)).decrement(PRODUCT_ID, SALE_ID, 2);
+        verify(stockRewarmPort, times(1)).rewarmIfAbsent(SALE_ID, StockCount.of(38));
+    }
+
+    @Test
+    void returnsDurableSuccessWhenRewarmingIsUnavailable() {
+        arrangeProductWithAllocation();
+        when(stockDecrementPort.decrement(SALE_ID, 2)).thenReturn(-2L);
+        when(stockFallbackPort.decrement(PRODUCT_ID, SALE_ID, 2))
+                .thenReturn(Optional.of(StockCount.of(38)));
+        doThrow(new StockRewarmUnavailableException(
+                "unavailable",
+                new RuntimeException("connection failed")
+        )).when(stockRewarmPort).rewarmIfAbsent(SALE_ID, StockCount.of(38));
+
+        StockDecrementResult result = service.decrement(PRODUCT_ID, SALE_ID, 2);
+
+        StockDecrementResult.Decremented decremented =
+                assertInstanceOf(StockDecrementResult.Decremented.class, result);
+        assertEquals(StockCount.of(38), decremented.remainingStock());
+        verify(stockDecrementPort, times(1)).decrement(SALE_ID, 2);
+        verify(stockFallbackPort, times(1)).decrement(PRODUCT_ID, SALE_ID, 2);
+        verify(stockRewarmPort, times(1)).rewarmIfAbsent(SALE_ID, StockCount.of(38));
     }
 
     @Test
@@ -135,6 +166,7 @@ class StockCounterServiceTest {
 
         verifyNoInteractions(stockDecrementPort);
         verifyNoInteractions(stockFallbackPort);
+        verifyNoInteractions(stockRewarmPort);
     }
 
     @Test
@@ -149,6 +181,7 @@ class StockCounterServiceTest {
 
         verifyNoInteractions(stockDecrementPort);
         verifyNoInteractions(stockFallbackPort);
+        verifyNoInteractions(stockRewarmPort);
     }
 
     @ParameterizedTest
@@ -163,6 +196,7 @@ class StockCounterServiceTest {
 
         verifyNoInteractions(stockDecrementPort);
         verifyNoInteractions(stockFallbackPort);
+        verifyNoInteractions(stockRewarmPort);
     }
 
     @Test
@@ -176,6 +210,7 @@ class StockCounterServiceTest {
         );
 
         verifyNoInteractions(stockFallbackPort);
+        verifyNoInteractions(stockRewarmPort);
     }
 
     @Test
@@ -189,6 +224,7 @@ class StockCounterServiceTest {
         );
 
         verifyNoInteractions(stockFallbackPort);
+        verifyNoInteractions(stockRewarmPort);
     }
 
     @Test
@@ -203,6 +239,7 @@ class StockCounterServiceTest {
         );
 
         verifyNoInteractions(stockFallbackPort);
+        verifyNoInteractions(stockRewarmPort);
     }
 
     @Test
@@ -218,6 +255,7 @@ class StockCounterServiceTest {
 
         verify(stockDecrementPort, times(1)).decrement(SALE_ID, 1);
         verify(stockFallbackPort, times(1)).decrement(PRODUCT_ID, SALE_ID, 1);
+        verifyNoInteractions(stockRewarmPort);
     }
 
     private void arrangeProductWithAllocation() {

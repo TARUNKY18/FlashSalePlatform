@@ -1343,3 +1343,268 @@ Before this SESSION_LOG append:
 - Week 3 status: incomplete; remaining work is listed above
 
 This SESSION_LOG append is the only working-tree modification made after `2a22457`.
+
+---
+
+## SESSION-004
+**Date:** 2026-07-24
+**Milestone:** Week 3 — PostgreSQL Fallback
+**Outcome:** COMPLETE
+**Engineer:** Tarun K Y
+**Branch:** `main`
+**Implementation commit:** `9bb3ad7` (`feat(inventory): implement PostgreSQL fallback adapter`)
+
+---
+
+### Objective and governing scope
+
+Implement only the approved PostgreSQL fallback slice on top of the completed
+StockCounterService work.
+
+Required behavior:
+
+- Preserve every completed Week 3 slice.
+- On Redis cache miss or translated Redis connection failure, invoke one
+  authoritative PostgreSQL fallback decrement.
+- Keep the fallback behind an application-owned port.
+- Mutate current stock through the Product aggregate.
+- Use a real transaction and PostgreSQL pessimistic locking.
+- Preserve Product ownership, Product + Sale uniqueness, non-negative stock,
+  version mapping, and the existing domain/JPA translation boundary.
+- Return success or sold out from the fallback.
+
+Explicitly excluded:
+
+- Redis re-warming
+- Redis pre-warm
+- REST/API work
+- Kafka
+- Reservation/Week 4 work
+- Retry logic
+- Release or reconciliation
+- Schema changes, audit tables, or `stock_reservation_log`
+- SaleService changes
+- Unrelated refactoring
+
+---
+
+### Product-owned fallback decrement
+
+`Product.decrementStock(SaleId, int)` is the approved domain mutation.
+
+Behavior:
+
+- Rejects null SaleId.
+- Rejects non-positive quantity.
+- Requires an owned StockLevel for the SaleId.
+- Returns `Optional.empty()` when durable current stock is insufficient.
+- Leaves Product and StockLevel state unchanged on insufficient stock.
+- On success, decrements current stock by exactly the requested quantity.
+- Replaces the immutable owned StockLevel with the decremented state.
+- Advances the StockLevel domain version.
+- Leaves the Product aggregate version unchanged because the mutation is owned
+  by the child entity.
+
+The aggregate continues to expose immutable StockLevel snapshots and no
+independent StockLevel mutation or repository was added.
+
+---
+
+### Application ports and orchestration
+
+#### `StockFallbackPort`
+
+New infrastructure-neutral application port:
+
+```text
+decrement(ProductId, SaleId, int) -> Optional<StockCount>
+```
+
+- Present StockCount = successful durable decrement and remaining stock.
+- Empty optional = insufficient durable stock / sold out.
+- No PostgreSQL, JPA, transaction, or Spring Data type crosses the port.
+
+#### `StockDecrementUnavailableException`
+
+New application-owned exception signaling that the primary stock counter cannot
+be reached. This prevents Redis exception types from entering
+StockCounterService.
+
+#### `StockCounterService`
+
+Updated orchestration:
+
+1. Preserve Product and owned StockLevel validation before counter access.
+2. Invoke `StockDecrementPort` at most once.
+3. Preserve Redis `-1` as sold out and non-negative values as success.
+4. On Redis `-2` cache miss, invoke `StockFallbackPort` once.
+5. On `StockDecrementUnavailableException`, invoke `StockFallbackPort` once.
+6. Map a present fallback StockCount to `Decremented`.
+7. Map an empty fallback result to `SoldOut`.
+8. Reject a null fallback result as an illegal infrastructure result.
+
+No retry, Redis re-warm, pre-warm, or direct ProductRepository save was added to
+StockCounterService. A successful Redis decrement still performs no PostgreSQL
+write.
+
+---
+
+### Redis connection-failure translation
+
+`RedisStockDecrementAdapter` still preserves raw `-2`, `-1`, non-negative, and
+null executor results without interpreting numeric business outcomes.
+
+It now translates only `RedisConnectionFailureException` into
+`StockDecrementUnavailableException`. Other failures are not converted into
+fallback outcomes.
+
+`StockDecrementLuaExecutor` and `stock-decrement.lua` were unchanged.
+
+---
+
+### PostgreSQL fallback adapter and locking
+
+`PostgresStockFallbackAdapter` implements `StockFallbackPort`.
+
+The complete operation is annotated `@Transactional`:
+
+1. Call `SpringDataProductRepository.findByIdForUpdate(ProductId)`.
+2. Acquire `LockModeType.PESSIMISTIC_WRITE` on the Product aggregate root.
+3. Load owned StockLevels inside the same transaction.
+4. Map the complete managed JPA aggregate to Product.
+5. Invoke `Product.decrementStock`.
+6. Return empty without update or flush when durable stock is insufficient.
+7. Apply successful domain current stock through
+   `ProductPersistenceMapper.applyCurrentStock`.
+8. Flush the managed StockLevel before returning remaining stock.
+
+Locking the Product root serializes fallback decrements for its owned
+StockLevels without introducing an unrestricted child repository.
+
+`ProductPersistenceMapper` remains the sole domain/JPA translation boundary.
+The mapper matches Product identity, StockLevel identity, and SaleId before
+applying current stock to the managed child. JPA remains responsible for
+advancing the persisted optimistic version during flush.
+
+No Flyway migration or database schema change was required.
+
+---
+
+### Files changed by implementation commit `9bb3ad7`
+
+Production:
+
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/StockCounterService.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/StockDecrementResult.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/port/StockDecrementUnavailableException.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/port/StockFallbackPort.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/domain/aggregate/Product.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/PostgresStockFallbackAdapter.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/ProductPersistenceMapper.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/SpringDataProductRepository.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/StockLevelJpaEntity.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/redis/RedisStockDecrementAdapter.java`
+
+Tests:
+
+- `services/inventory-service/src/test/java/com/flashsale/inventory/application/StockCounterServiceTest.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/domain/aggregate/ProductTest.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/infra/persistence/PostgresStockFallbackAdapterTest.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/infra/redis/RedisStockDecrementAdapterTest.java`
+
+No documentation file was part of implementation commit `9bb3ad7`.
+
+---
+
+### Verification
+
+Final command:
+
+```bash
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+```
+
+Final result:
+
+```text
+BUILD SUCCESSFUL in 19s
+67 tests passed, 0 failed, 0 errors, 0 skipped
+```
+
+The first restricted-sandbox attempt could not create the Gradle wrapper cache
+lock under the user Gradle directory. The same command was rerun with approved
+cache access. After the mapper-boundary adjustment, the clean build was run
+again against the final source state and passed.
+
+Test inventory:
+
+| Test class | Tests | Result |
+|---|---:|---|
+| `ProductTest` | 14 | PASS |
+| `StockLevelTest` | 6 | PASS |
+| `StockCountTest` | 7 | PASS |
+| `TypedIdTest` | 4 | PASS |
+| `ProductPersistenceMapperTest` | 3 | PASS |
+| `ProductRepositoryTest` | 3 | PASS |
+| `RedisScriptConfigurationTest` | 1 | PASS |
+| `StockDecrementLuaExecutorTest` | 5 | PASS |
+| `RedisStockDecrementAdapterTest` | 6 | PASS |
+| `StockCounterServiceTest` | 14 | PASS |
+| `PostgresStockFallbackAdapterTest` | 4 | PASS |
+| **Total** | **67** | **67 passed** |
+
+All 67 tests are unit tests.
+
+Additional verification:
+
+- `git diff --check` passed before the implementation commit.
+- Documentation, SaleService, Inventory resources/migrations, and all Lua
+  resources were unchanged by the implementation commit.
+- Scope scans found no REST controller, Kafka, retry annotation, Reservation,
+  pre-warm, or Redis re-warming implementation.
+- Inventory domain framework-import scan returned no matches.
+- Inventory application-to-infrastructure import scan returned no matches.
+
+Non-failing warnings:
+
+- Gradle deprecated-feature warning for future Gradle 9.0 compatibility.
+- Test JVM class-data-sharing warning after Mockito bootstrap-classpath
+  instrumentation.
+
+---
+
+### Verification boundaries and remaining risks
+
+- The new fallback and lock annotations are unit-tested; no live PostgreSQL or
+  Testcontainers execution was performed.
+- Concurrent Product-root lock serialization and zero-oversell behavior remain
+  to be verified against real PostgreSQL.
+- Product/StockLevel optimistic-version interaction remains to be verified
+  against Hibernate/PostgreSQL.
+- Redis Lua execution remains unverified against live Redis.
+- No test currently simulates Redis failure after server-side execution.
+- Redis re-warming remains intentionally unimplemented.
+
+---
+
+### Git and milestone state
+
+- Branch: `main`
+- Implementation HEAD: `9bb3ad7`
+- `origin/main`: `9bb3ad7`
+- InventoryService: 22 production Java types
+- InventoryService tests: 11 classes, 67 passing tests
+- PostgreSQL fallback: complete
+- Week 3: still in progress
+
+Remaining Week 3 work:
+
+1. Redis re-warming
+2. Pre-warm use case and trigger decision
+3. Property-based tests
+4. Live Redis/PostgreSQL failure and concurrency tests
+5. Regression tests
+6. Final documentation reconciliation
+
+Kafka, Inventory REST, Reservation/Week 4, retry logic, release, and
+reconciliation remain excluded.

@@ -4,6 +4,8 @@ import com.flashsale.inventory.application.port.ProductRepository;
 import com.flashsale.inventory.application.port.StockDecrementPort;
 import com.flashsale.inventory.application.port.StockDecrementUnavailableException;
 import com.flashsale.inventory.application.port.StockFallbackPort;
+import com.flashsale.inventory.application.port.StockRewarmPort;
+import com.flashsale.inventory.application.port.StockRewarmUnavailableException;
 import com.flashsale.inventory.domain.aggregate.Product;
 import com.flashsale.inventory.domain.entity.StockLevel;
 import com.flashsale.inventory.domain.vo.ProductId;
@@ -19,7 +21,8 @@ import org.springframework.stereotype.Service;
  *
  * <p>The Product aggregate remains the authority for allocation ownership and quantity
  * bounds. A cache miss or unavailable primary counter delegates once to the durable
- * fallback. This service does not retry, re-warm, or pre-warm Redis.
+ * fallback. A successful fallback is used to safely restore a missing primary counter.
+ * This service does not retry or pre-warm Redis.
  */
 @Service
 public class StockCounterService {
@@ -30,15 +33,18 @@ public class StockCounterService {
     private final ProductRepository productRepository;
     private final StockDecrementPort stockDecrementPort;
     private final StockFallbackPort stockFallbackPort;
+    private final StockRewarmPort stockRewarmPort;
 
     public StockCounterService(
             ProductRepository productRepository,
             StockDecrementPort stockDecrementPort,
-            StockFallbackPort stockFallbackPort
+            StockFallbackPort stockFallbackPort,
+            StockRewarmPort stockRewarmPort
     ) {
         this.productRepository = productRepository;
         this.stockDecrementPort = stockDecrementPort;
         this.stockFallbackPort = stockFallbackPort;
+        this.stockRewarmPort = stockRewarmPort;
     }
 
     public StockDecrementResult decrement(
@@ -111,8 +117,17 @@ public class StockCounterService {
         if (remainingStock == null) {
             throw new IllegalStateException("Stock fallback port returned null");
         }
-        return remainingStock
-                .<StockDecrementResult>map(StockDecrementResult.Decremented::new)
-                .orElseGet(StockDecrementResult.SoldOut::new);
+        if (remainingStock.isEmpty()) {
+            return new StockDecrementResult.SoldOut();
+        }
+
+        StockCount durableRemainingStock = remainingStock.orElseThrow();
+        try {
+            stockRewarmPort.rewarmIfAbsent(saleId, durableRemainingStock);
+        } catch (StockRewarmUnavailableException exception) {
+            // The authoritative PostgreSQL decrement has already succeeded. Re-warming is
+            // best-effort and cannot turn that committed decrement into a failed result.
+        }
+        return new StockDecrementResult.Decremented(durableRemainingStock);
     }
 }
