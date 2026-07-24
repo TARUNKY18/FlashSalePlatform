@@ -517,3 +517,829 @@ delivery rather than knowledge review. Carry forward to next session.
 **Last commit:** Week 2: SaleService skeleton — FlashSale aggregate, 12 tests passing, Gradle 8.10 wrapper
 **Application code written:** 2,400+ lines (38 files, domain → application → infra → API)
 **Java services completed:** 1 of 5 (SaleService)
+
+---
+
+## SESSION-003
+**Date:** 2026-07-23 to 2026-07-24
+**Milestone:** Week 3 — InventoryService through StockCounterService
+**Outcome:** APPROVED SLICES COMPLETE; WEEK 3 STILL IN PROGRESS
+**Engineer:** Tarun K Y
+**Branch:** `main`
+**Starting commit:** `a2e971c` (`week2-complete`)
+**Ending implementation commit:** `2a22457` (`Week3: Complete StockCounterService`)
+
+---
+
+### Objective and governing scope
+
+Implement InventoryService incrementally, stopping after every slice for review. The
+approved Week 3 implementation scope for the overall milestone is:
+
+1. InventoryService module
+2. Product aggregate
+3. StockLevel entity
+4. StockCount value object
+5. Flyway migration
+6. Redis atomic decrement
+7. Redis pre-warm
+8. PostgreSQL fallback
+9. Repository locking
+10. Correctness tests
+
+The following remained explicitly outside scope throughout this session:
+
+- Kafka integration
+- Inventory GET endpoint or any REST endpoint
+- Reservation aggregate or other Week 4 work
+- Release functionality
+- Reconciliation functionality
+- Independent StockLevel writes outside Product
+- Unrelated SaleService changes or refactoring
+
+Implementation slices were completed and approved one at a time. No work from a later
+slice was intentionally pulled into an earlier one.
+
+---
+
+### Slice 1 — InventoryService module skeleton
+
+**Status:** COMPLETE and approved
+**Commit:** `0444c9b` (`feat: bootstrap InventoryService module`)
+
+**Files:**
+
+- `settings.gradle`
+  - Added `include 'services:inventory-service'`.
+  - This was the only existing repository file modified in this slice.
+- `services/inventory-service/build.gradle`
+  - Spring Boot `3.3.4`
+  - Spring dependency-management `1.1.6`
+  - `spring-boot-starter-web` (application/actuator runtime only; no endpoints added)
+  - `spring-boot-starter-data-jpa`
+  - `spring-boot-starter-data-redis`
+  - `spring-boot-starter-actuator`
+  - Flyway core and PostgreSQL database support
+  - PostgreSQL runtime driver
+  - Spring Boot test starter
+- `InventoryServiceApplication`
+  - Spring Boot entry point in package `com.flashsale.inventory`.
+- `application.yml`
+  - Port `${INVENTORY_SERVICE_PORT:8082}`
+  - Application name `inventory-service`
+  - Java virtual threads enabled with `spring.threads.virtual.enabled=true`
+  - PostgreSQL URL `${INVENTORY_SERVICE_DB_URL:jdbc:postgresql://localhost:5433/inventory_db}`
+  - JPA `ddl-auto: validate`, `open-in-view: false`
+  - Flyway enabled at `classpath:db/migration`
+  - Redis Cluster nodes configured from `SPRING_DATA_REDIS_CLUSTER_NODES`
+  - Actuator `health` and `info`
+
+**Java 21 decision:** InventoryService inherits the root `subprojects` Java 21 toolchain.
+The toolchain was not duplicated inside the module build file. Gradle resolved both
+`sourceCompatibility` and `targetCompatibility` to `21`.
+
+**Intentionally absent:** domain code, persistence code, migration, API, Kafka, and
+business logic.
+
+---
+
+### Slice 2 — Framework-free Inventory domain model
+
+**Status:** COMPLETE and approved
+**Commit:** `213570a` (`feat(inventory): implement inventory domain model`)
+**Tests after slice:** 27 passed, 0 failed, 0 skipped
+
+#### New production classes
+
+| Class | Package | Responsibility |
+|---|---|---|
+| `Product` | `com.flashsale.inventory.domain.aggregate` | Aggregate root owning every StockLevel for one Product; allocates stock, enforces ownership/uniqueness/allocation ceiling, exposes immutable snapshots, and tracks aggregate version. |
+| `StockLevel` | `com.flashsale.inventory.domain.entity` | Identified entity representing one Product allocation for one Sale; carries total allocation, current stock, and entity version. |
+| `StockCount` | `com.flashsale.inventory.domain.vo` | Immutable non-negative `int` stock value; provides availability, sold-out, positive increment/decrement, and `canDecrement`. |
+| `ProductId` | `com.flashsale.inventory.domain.vo` | Typed UUID identity for Product with generation and parsing factories. |
+| `SaleId` | `com.flashsale.inventory.domain.vo` | Typed opaque UUID reference to SaleService; Inventory does not import SaleService types. |
+| `StockLevelId` | `com.flashsale.inventory.domain.vo` | Typed UUID identity for StockLevel. |
+
+#### New test classes
+
+| Test class | Responsibility | Tests |
+|---|---|---:|
+| `ProductTest` | Product creation, allocations, ceiling, duplicate Sale, ownership, immutable snapshots, and safe reconstitution. | 10 |
+| `StockLevelTest` | Initial allocation, reconstitution, zero/current/ceiling/version boundaries. | 6 |
+| `StockCountTest` | Negative rejection, availability, immutable arithmetic, positive quantities, underflow/overflow behavior. | 7 |
+| `TypedIdTest` | UUID/string creation, null rejection, type distinction, and generated-ID uniqueness. | 4 |
+
+#### Domain decisions
+
+- Domain packages contain no Spring, JPA, Hibernate, Redis, or Kafka imports/annotations.
+- `Product.totalStock` may be zero but never negative.
+- A StockLevel allocation must be strictly positive.
+- The sum of `StockLevel.totalAllocated` values may never exceed Product total stock.
+- Product stores StockLevels keyed by SaleId, enforcing one StockLevel per Product + Sale.
+- Product rejects a reconstituted StockLevel whose ProductId differs from the aggregate ID.
+- `StockLevel.currentStock` must be between zero and `totalAllocated`, inclusive.
+- Product and StockLevel versions may never be negative.
+- Product collection access returns immutable snapshots.
+- Failed allocations do not change the aggregate or its version.
+- `StockLevelId` is UUID-backed. The one-Product-plus-one-Sale rule is a separate aggregate
+  and database uniqueness invariant, not the entity's ID representation.
+- Release and reconciliation commands were not added.
+
+---
+
+### Slice 3 — Inventory persistence layer
+
+**Status:** COMPLETE and approved
+**Committed as part of:** `eecc75c` (`Week3: Complete Redis adapter layer`)
+**Tests after slice:** 33 passed, 0 failed, 0 skipped
+
+#### New production classes
+
+| Class | Package | Responsibility |
+|---|---|---|
+| `ProductJpaEntity` | `com.flashsale.inventory.infra.persistence` | JPA representation of Product: `id`, `total_stock`, `version`, and owned StockLevel collection. Uses `@Version`, `@OneToMany`, cascade-all, lazy loading, and orphan removal. |
+| `StockLevelJpaEntity` | `com.flashsale.inventory.infra.persistence` | JPA representation of StockLevel: `id`, Product owner, `sale_id`, `total_allocated`, `current_stock`, and `version`. Uses `@Version` and a unique Product + Sale constraint. |
+| `ProductPersistenceMapper` | `com.flashsale.inventory.infra.persistence` | The sole domain/JPA translation boundary. Maps the complete Product aggregate tree in both directions, establishes both sides of ownership, preserves versions, and lets domain reconstitution reject invalid persisted state. |
+| `SpringDataProductRepository` | `com.flashsale.inventory.infra.persistence` | `JpaRepository<ProductJpaEntity, UUID>`; overrides `findById` with an entity graph for `stockLevels`. |
+| `ProductRepository` | `com.flashsale.inventory.infra.persistence` | Aggregate-oriented JPA adapter supporting `findById(ProductId)` and `save(Product)`. Persists StockLevels only through Product and uses `saveAndFlush` before mapping the returned aggregate. |
+
+#### New test classes
+
+| Test class | Responsibility | Tests |
+|---|---|---:|
+| `ProductPersistenceMapperTest` | Complete domain-to-JPA and JPA-to-domain mapping, ownership, version preservation, and rejection of invalid persisted stock. | 3 |
+| `ProductRepositoryTest` | Loading, missing Product behavior, mapping, save-and-flush delegation, and returned aggregate. | 3 |
+
+#### Persistence decisions
+
+- Domain classes remained unchanged and unannotated.
+- Persistence entities are separate mutable JPA data holders.
+- There is intentionally no independent Spring Data StockLevel repository. Such a
+  repository would allow writes around the Product aggregate boundary.
+- Product owns StockLevels with `cascade = ALL` and `orphanRemoval = true`.
+- The child owns the FK through `@ManyToOne` / `@JoinColumn(product_id)`.
+- An entity graph loads Product + StockLevels for mapping without relying on an open session.
+- Both Product and StockLevel persistence entities use optimistic `@Version` fields.
+- Mapper methods round-trip domain versions exactly.
+
+---
+
+### Slice 4 — Initial Inventory V1 Flyway migration
+
+**Status:** COMPLETE and approved
+**Committed as part of:** `eecc75c`
+**Tests after slice:** 33 passed, 0 failed, 0 skipped
+
+**New file:** `services/inventory-service/src/main/resources/db/migration/V1__init.sql`
+
+#### `products`
+
+Exact columns matching `ProductJpaEntity`:
+
+| Column | SQL type | Rules |
+|---|---|---|
+| `id` | `UUID` | NOT NULL, primary key, application-assigned |
+| `total_stock` | `INTEGER` | NOT NULL, `>= 0` |
+| `version` | `BIGINT` | NOT NULL, `>= 0`, optimistic lock |
+
+Constraints:
+
+- `products_pkey`
+- `products_total_stock_ck`
+- `products_version_ck`
+
+#### `stock_levels`
+
+Exact columns matching `StockLevelJpaEntity`:
+
+| Column | SQL type | Rules |
+|---|---|---|
+| `id` | `UUID` | NOT NULL, primary key, application-assigned |
+| `product_id` | `UUID` | NOT NULL, FK to `products(id)` |
+| `sale_id` | `UUID` | NOT NULL, opaque cross-service reference |
+| `total_allocated` | `INTEGER` | NOT NULL, `> 0` |
+| `current_stock` | `INTEGER` | NOT NULL, `>= 0`, `<= total_allocated` |
+| `version` | `BIGINT` | NOT NULL, `>= 0`, optimistic lock |
+
+Constraints:
+
+- `stock_levels_pkey`
+- `stock_levels_product_id_fk` with `ON DELETE RESTRICT`
+- `stock_levels_product_sale_unique`
+- `stock_levels_total_allocated_ck`
+- `stock_levels_current_stock_ck`
+- `stock_levels_stock_ceiling_ck`
+- `stock_levels_version_ck`
+
+Index decisions:
+
+- PostgreSQL automatically creates the Product and StockLevel PK indexes.
+- The Product + Sale UNIQUE constraint creates a B-tree index beginning with
+  `product_id`; this supports both uniqueness and the Product-to-StockLevel join.
+- No redundant standalone `product_id` index was added.
+- No FK exists for `sale_id` because SaleService owns another database.
+- No database UUID defaults exist because IDs are generated by the domain.
+
+Explicitly absent: Reservation, release, reconciliation, outbox/Kafka, audit/log,
+Redis, created/updated timestamp, and Week 4 tables or columns.
+
+---
+
+### Slice 5 — Approved Redis Lua decrement integration
+
+**Status:** COMPLETE and approved
+**Committed as part of:** `eecc75c`
+**Tests after slice:** 39 passed, 0 failed, 0 skipped
+
+**Approved existing resource used unchanged:**
+`services/inventory-service/src/main/resources/lua/stock-decrement.lua`
+
+Script contract:
+
+- `KEYS[1] = stock:{saleId}`
+- `ARGV[1] = quantity`
+- `-2` = cache miss
+- `-1` = sold out
+- non-negative = remaining stock
+- Performs atomic `DECRBY` only after its checks.
+
+Approved resource SHA-1:
+`2dab8322003da880c4aa8a4f55ca9aefaadc0215`
+
+#### New production classes
+
+| Class | Package | Responsibility |
+|---|---|---|
+| `RedisScriptConfiguration` | `com.flashsale.inventory.infra.config` | Loads `lua/stock-decrement.lua` as a singleton `DefaultRedisScript<Long>` using `ClassPathResource`; Spring can reuse the computed SHA for script execution. |
+| `StockDecrementLuaExecutor` | `com.flashsale.inventory.infra.redis` | Formats `stock:{saleId}`, serializes quantity, calls `StringRedisTemplate.execute`, and returns the raw nullable Long without interpreting it. |
+
+#### New test classes
+
+| Test class | Responsibility | Tests |
+|---|---|---:|
+| `RedisScriptConfigurationTest` | Classpath loading, approved content markers, Long result type, exact SHA, singleton bean, and SHA reuse. | 1 |
+| `StockDecrementLuaExecutorTest` | Hash-tagged key, quantity argument, RedisTemplate delegation, raw result preservation for `-2`, `-1`, `0`, and positive results, and null SaleId guard. | 5 |
+
+No live Redis call occurred in this slice; execution wiring was unit-tested with mocks.
+
+---
+
+### Slice 6 — Redis adapter and application port
+
+**Status:** COMPLETE and approved
+**Commit:** `eecc75c`
+**Tests after slice:** 44 passed, 0 failed, 0 skipped
+
+#### New production classes
+
+| Class | Package | Responsibility |
+|---|---|---|
+| `StockDecrementPort` | `com.flashsale.inventory.application.port` | Redis-neutral outbound interface: `decrement(SaleId, int) -> Long`. Exposes no Spring, Redis, Lua, key, or serialization types. |
+| `RedisStockDecrementAdapter` | `com.flashsale.inventory.infra.redis` | Implements StockDecrementPort by delegating unchanged to StockDecrementLuaExecutor. Contains no branching or result interpretation. |
+
+#### New test class
+
+| Test class | Responsibility | Tests |
+|---|---|---:|
+| `RedisStockDecrementAdapterTest` | Exact SaleId/quantity delegation and unchanged propagation of `-2`, `-1`, `0`, positive, and null executor values. | 5 |
+
+The Lua executor was reused without modification.
+
+---
+
+### Slice 7 — StockCounterService
+
+**Status:** COMPLETE and approved
+**Commit:** `2a22457` (`Week3: Complete StockCounterService`)
+**Tests after slice:** 55 passed, 0 failed, 0 skipped
+
+#### New production classes
+
+| Class | Package | Responsibility |
+|---|---|---|
+| `ProductRepository` | `com.flashsale.inventory.application.port` | Application-facing aggregate repository interface with `findById(ProductId)` and `save(Product)`. |
+| `StockCounterService` | `com.flashsale.inventory.application` | Loads Product through the port, resolves the owned StockLevel, validates request bounds through `StockCount`, invokes StockDecrementPort exactly once, and maps approved raw codes to application outcomes. |
+| `StockDecrementResult` | `com.flashsale.inventory.application` | Sealed result: `Decremented(StockCount)`, `SoldOut`, or `CacheMiss`. |
+
+#### Existing file changed
+
+`com.flashsale.inventory.infra.persistence.ProductRepository` now implements the
+application `ProductRepository` interface. Only the implemented-interface declaration
+and `@Override` markers changed in this slice. JPA mappings, queries, transaction
+annotations, and mapper behavior did not change.
+
+#### New test class
+
+| Test class | Responsibility | Tests |
+|---|---|---:|
+| `StockCounterServiceTest` | Success, sold out, cache miss, Product/StockLevel absence, quantity bounds, null/unknown/out-of-range port values, no repository save, and exactly one Redis-port invocation. | 11 |
+
+#### Current orchestration
+
+1. Require non-null ProductId and SaleId.
+2. Load Product via the application `ProductRepository`.
+3. Resolve the Sale's StockLevel through `Product.stockLevelFor`; never query or write a
+   StockLevel independently.
+4. Use `stockLevel.totalAllocated().canDecrement(quantity)` to enforce a positive request
+   no larger than the sale allocation.
+5. Invoke `StockDecrementPort.decrement(saleId, quantity)` exactly once.
+6. Map raw `-2` to `CacheMiss`; do not retry, fall back, save, or re-warm.
+7. Map raw `-1` to `SoldOut`.
+8. Map a non-negative in-range value to `Decremented(StockCount)`.
+9. Reject null, unknown negative, or values above Java/domain `int` range.
+
+The application package imports application ports and domain types only; it has no
+dependency on infrastructure, Redis, Lua, or JPA classes.
+
+---
+
+### Packages introduced in this session
+
+Production:
+
+- `com.flashsale.inventory`
+- `com.flashsale.inventory.application`
+- `com.flashsale.inventory.application.port`
+- `com.flashsale.inventory.domain.aggregate`
+- `com.flashsale.inventory.domain.entity`
+- `com.flashsale.inventory.domain.vo`
+- `com.flashsale.inventory.infra.config`
+- `com.flashsale.inventory.infra.persistence`
+- `com.flashsale.inventory.infra.redis`
+
+Tests mirror:
+
+- `com.flashsale.inventory.application`
+- `com.flashsale.inventory.domain.aggregate`
+- `com.flashsale.inventory.domain.entity`
+- `com.flashsale.inventory.domain.vo`
+- `com.flashsale.inventory.infra.config`
+- `com.flashsale.inventory.infra.persistence`
+- `com.flashsale.inventory.infra.redis`
+
+Resources:
+
+- `services/inventory-service/src/main/resources/db/migration`
+- Existing `services/inventory-service/src/main/resources/lua` retained.
+
+Current InventoryService source inventory:
+
+- 19 production Java classes/interfaces
+- 10 Java test classes
+- 6 resource files (`application.yml`, V1 migration, and four pre-existing Lua scripts)
+
+---
+
+### Architecture decisions established by repository reality
+
+1. **Java 21 / Spring Boot 3.3.4:** Java toolchain remains root-owned; virtual threads
+   are enabled per service.
+2. **Framework-free domain:** No framework annotations or dependencies may enter
+   `com.flashsale.inventory.domain`.
+3. **Aggregate boundary:** Product owns StockLevel. All allocation access is through Product.
+4. **No child repository:** StockLevel has no standalone repository.
+5. **Typed IDs:** Raw UUIDs do not cross domain method boundaries where a typed ID exists.
+6. **StockLevel identity:** UUID-backed StockLevelId plus a separate Product + Sale
+   uniqueness invariant.
+7. **Database-per-service:** SaleId is opaque in inventory_db and has no database FK.
+8. **Separate persistence model:** JPA entities remain under `infra.persistence`; mapping is
+   isolated in ProductPersistenceMapper.
+9. **Aggregate fetch:** Spring Data uses an entity graph to load StockLevels with Product.
+10. **Optimistic locking:** Product and StockLevel JPA entities use `@Version`; corresponding
+    SQL columns are non-null BIGINTs.
+11. **Minimal V1 schema:** The migration follows approved Java entities, not stale design
+    documents containing name/SKU/price/audit/Redis/reconciliation columns.
+12. **Application-assigned UUIDs:** No database UUID defaults.
+13. **Index economy:** PK and UNIQUE-created indexes are reused; no redundant
+    `stock_levels(product_id)` index.
+14. **Lua ownership:** The approved decrement script is loaded, not copied into Java.
+15. **SHA reuse:** `DefaultRedisScript<Long>` is a singleton bean with stable SHA.
+16. **Redis Cluster key:** Decrement uses `stock:{saleId}` so the sale ID is a hash tag.
+17. **Layered Redis boundary:** Lua executor handles Redis mechanics; Redis adapter implements
+    a Redis-neutral application port; StockCounterService interprets outcomes.
+18. **Raw adapter contract:** Redis adapter and executor do not interpret `-2`/`-1`/success.
+19. **Cache miss behavior today:** StockCounterService exposes `CacheMiss`; it does not retry
+    or invoke PostgreSQL.
+20. **No persistence update after Redis today:** A successful Redis decrement does not call
+    ProductRepository.save in the current slice.
+21. **No unrelated changes:** SaleService was not modified.
+
+---
+
+### Invariants that must never change without an explicit architecture decision
+
+#### Domain
+
+- StockCount is never negative.
+- Allocation quantity is strictly positive.
+- Sum of Product allocations never exceeds Product total stock.
+- At most one StockLevel exists per Product + Sale.
+- Every StockLevel inside Product has the same ProductId as its owner.
+- StockLevel current stock is `0 <= currentStock <= totalAllocated`.
+- Product and StockLevel versions are never negative.
+- Product state cannot be mutated by editing a returned collection.
+- Invalid allocation attempts are atomic: no child added and no version increment.
+- InventoryContext treats SaleId as opaque and imports no SaleService classes.
+
+#### Persistence/database
+
+- Domain classes remain free of JPA annotations.
+- Product and StockLevel persistence entities remain separate from domain classes.
+- StockLevels are persisted only via Product.
+- `stock_levels.product_id` is mandatory and FK-constrained.
+- `(product_id, sale_id)` remains unique in both JPA metadata and SQL.
+- `current_stock` never exceeds `total_allocated` in SQL.
+- Product/StockLevel optimistic version columns remain mapped and non-negative.
+- No cross-database Sale FK is introduced.
+
+#### Redis/application
+
+- Redis decrement is atomic through the approved Lua script; never replace it with a
+  client-side GET-then-DECR sequence.
+- The stock key remains `stock:{saleId}`.
+- Script return contract remains exactly `-2`, `-1`, or non-negative.
+- Lua executor and Redis adapter return raw values without business interpretation.
+- StockCounterService accesses allocation through Product before invoking the port.
+- Cache miss currently causes one `CacheMiss` result and zero fallback/retry/re-warm calls.
+- Unknown negative, null, and out-of-int-range port values are rejected.
+- No successful Redis decrement currently triggers a Product save.
+
+---
+
+### Verification commands actually executed
+
+Discovery-only `sed`, `find`, and broad documentation searches are omitted here; every
+command used to validate implementation/build behavior is recorded below.
+
+#### Skeleton verification
+
+```bash
+git status --short
+git branch --show-current
+./gradlew projects
+```
+
+The first `./gradlew projects` attempt failed in the managed sandbox because Gradle could
+not create its cached wrapper `.lck` file under the user Gradle directory. The identical
+verification was rerun with approved Gradle cache access:
+
+```bash
+./gradlew projects && ./gradlew :services:inventory-service:build
+```
+
+Results:
+
+- `projects`: InventoryService and SaleService both recognized; successful in 18s.
+- Initial InventoryService skeleton build: successful in 1m 5s; 5 tasks executed;
+  tests correctly reported `NO-SOURCE`.
+
+Additional skeleton checks:
+
+```bash
+git diff --check
+git status --short --untracked-files=all
+./gradlew :services:inventory-service:properties | rg '^(sourceCompatibility|targetCompatibility):'
+jar tf services/inventory-service/build/libs/inventory-service-0.1.0-SNAPSHOT.jar \
+  | rg 'InventoryServiceApplication|application.yml|BOOT-INF/lib/(spring-boot|spring-data-redis|flyway|postgresql)'
+git diff --no-index --check /dev/null services/inventory-service/build.gradle
+git diff --no-index --check /dev/null \
+  services/inventory-service/src/main/java/com/flashsale/inventory/InventoryServiceApplication.java
+git diff --no-index --check /dev/null \
+  services/inventory-service/src/main/resources/application.yml
+```
+
+Confirmed Java source/target 21 and packaged Boot entry point, YAML, Redis, Flyway, and
+PostgreSQL libraries.
+
+#### Domain verification
+
+```bash
+./gradlew :services:inventory-service:test --tests 'com.flashsale.inventory.domain.*'
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:test
+rg -n '<testsuite ' services/inventory-service/build/test-results/test/*.xml
+rg -n 'org\.springframework|jakarta\.persistence|javax\.persistence|org\.hibernate|redis|kafka' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/domain \
+  services/inventory-service/src/test/java/com/flashsale/inventory/domain
+rg -n '[[:blank:]]+$' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/domain \
+  services/inventory-service/src/test/java/com/flashsale/inventory/domain
+```
+
+Results:
+
+- Focused domain run: successful in 17s.
+- Full domain-slice build: successful in 11s.
+- Final domain rerun: successful in 9s.
+- 27 tests passed; forbidden framework/infrastructure search returned no matches.
+
+#### Persistence verification
+
+```bash
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+rg -n '<testsuite ' services/inventory-service/build/test-results/test/*.xml
+git diff --exit-code HEAD -- \
+  services/inventory-service/src/main/java/com/flashsale/inventory/domain \
+  services/inventory-service/src/test/java/com/flashsale/inventory/domain
+rg -n 'redis|flyway|kafka|RestController|Controller|application\.service' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence \
+  services/inventory-service/src/test/java/com/flashsale/inventory/infra/persistence
+rg -n '[[:blank:]]+$' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence \
+  services/inventory-service/src/test/java/com/flashsale/inventory/infra/persistence
+rg -n 'jakarta\.persistence|org\.springframework' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/domain \
+  services/inventory-service/src/test/java/com/flashsale/inventory/domain
+```
+
+Result: build successful in 22s; 33 tests passed; domain unchanged; excluded persistence
+scope and domain framework scans returned no matches.
+
+#### Migration verification
+
+```bash
+rg -n '^CREATE TABLE|^[[:space:]]+[a-z_]+[[:space:]]+(UUID|INTEGER|BIGINT)|CONSTRAINT|PRIMARY KEY|FOREIGN KEY|REFERENCES|UNIQUE|CHECK' \
+  services/inventory-service/src/main/resources/db/migration/V1__init.sql
+rg -n '@Table|@Id|@Column|@Version|@JoinColumn|@OneToMany|@ManyToOne|UniqueConstraint|private (UUID|int|long|List)' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/ProductJpaEntity.java \
+  services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/StockLevelJpaEntity.java
+rg -ni 'reservation|release|reconcil|kafka|audit|redis|created_at|updated_at|outbox|event' \
+  services/inventory-service/src/main/resources/db/migration/V1__init.sql
+rg -n '^CREATE TABLE' \
+  services/inventory-service/src/main/resources/db/migration/V1__init.sql
+./gradlew :services:inventory-service:clean :services:inventory-service:build
+jar tf services/inventory-service/build/libs/inventory-service-0.1.0-SNAPSHOT.jar \
+  | rg 'BOOT-INF/classes/db/migration/V1__init.sql'
+rg -n '[[:blank:]]+$' \
+  services/inventory-service/src/main/resources/db/migration/V1__init.sql
+```
+
+Result: exactly two tables; one-for-one JPA column/type/nullability/version mapping;
+excluded-structure search returned no matches; build successful in 18s with 33 tests;
+migration packaged at `BOOT-INF/classes/db/migration/V1__init.sql`.
+
+#### Lua integration verification
+
+```bash
+shasum services/inventory-service/src/main/resources/lua/stock-decrement.lua
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+rg -n '<testsuite ' services/inventory-service/build/test-results/test/*.xml
+git diff --exit-code -- \
+  services/inventory-service/src/main/resources/lua/stock-decrement.lua \
+  services/inventory-service/src/main/java/com/flashsale/inventory/domain
+rg -n 'StockCounterService|fallback|prewarm|Repository|RestController|Kafka|switch[[:space:]]*\(|result[[:space:]]*[<>=]' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/infra/config/RedisScriptConfiguration.java \
+  services/inventory-service/src/main/java/com/flashsale/inventory/infra/redis/StockDecrementLuaExecutor.java
+jar tf services/inventory-service/build/libs/inventory-service-0.1.0-SNAPSHOT.jar \
+  | rg 'BOOT-INF/classes/(lua/stock-decrement.lua|com/flashsale/inventory/infra/(config/RedisScriptConfiguration|redis/StockDecrementLuaExecutor)\.class)'
+rg -n '[[:blank:]]+$' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/infra/config/RedisScriptConfiguration.java \
+  services/inventory-service/src/main/java/com/flashsale/inventory/infra/redis/StockDecrementLuaExecutor.java \
+  services/inventory-service/src/test/java/com/flashsale/inventory/infra/config/RedisScriptConfigurationTest.java \
+  services/inventory-service/src/test/java/com/flashsale/inventory/infra/redis/StockDecrementLuaExecutorTest.java
+```
+
+Result: approved SHA matched; build successful in 18s; 39 tests passed; resource and both
+classes packaged; excluded-scope and whitespace scans returned no matches.
+
+#### Redis adapter verification
+
+```bash
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+rg -n '<testsuite ' services/inventory-service/build/test-results/test/*.xml
+rg -n 'StockCounterService|fallback|re-?warm|prewarm|Repository|RestController|Kafka|switch[[:space:]]*\(|if[[:space:]]*\(|executorResult[[:space:]]*[<>=]' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/application/port/StockDecrementPort.java \
+  services/inventory-service/src/main/java/com/flashsale/inventory/infra/redis/RedisStockDecrementAdapter.java \
+  services/inventory-service/src/test/java/com/flashsale/inventory/infra/redis/RedisStockDecrementAdapterTest.java
+rg -n '^import (org\.springframework|.*redis)' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/application/port/StockDecrementPort.java
+jar tf services/inventory-service/build/libs/inventory-service-0.1.0-SNAPSHOT.jar \
+  | rg 'BOOT-INF/classes/com/flashsale/inventory/(application/port/StockDecrementPort|infra/redis/RedisStockDecrementAdapter)\.class'
+rg -n '[[:blank:]]+$' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/application/port/StockDecrementPort.java \
+  services/inventory-service/src/main/java/com/flashsale/inventory/infra/redis/RedisStockDecrementAdapter.java \
+  services/inventory-service/src/test/java/com/flashsale/inventory/infra/redis/RedisStockDecrementAdapterTest.java
+```
+
+Result: build successful in 23s; 44 tests passed; port contained no Redis/Spring imports;
+no adapter business branching; port and adapter packaged.
+
+#### StockCounterService verification
+
+```bash
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+rg -n '<testsuite ' services/inventory-service/build/test-results/test/*.xml
+rg -n '^import com\.flashsale\.inventory\.infra|RedisStockDecrementAdapter|StockDecrementLuaExecutor|StringRedisTemplate|RedisScript' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/application/StockCounterService.java \
+  services/inventory-service/src/main/java/com/flashsale/inventory/application/StockDecrementResult.java \
+  services/inventory-service/src/main/java/com/flashsale/inventory/application/port/ProductRepository.java \
+  services/inventory-service/src/main/java/com/flashsale/inventory/application/port/StockDecrementPort.java
+rg -n 'save\(|fallback|retry|re-?warm|prewarm|RestController|Kafka' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/application/StockCounterService.java
+git diff --exit-code HEAD -- \
+  services/inventory-service/src/main/java/com/flashsale/inventory/domain \
+  services/inventory-service/src/main/resources/db/migration/V1__init.sql
+jar tf services/inventory-service/build/libs/inventory-service-0.1.0-SNAPSHOT.jar \
+  | rg 'BOOT-INF/classes/com/flashsale/inventory/application/(StockCounterService|StockDecrementResult|port/ProductRepository)\.class'
+rg -n '[[:blank:]]+$' \
+  services/inventory-service/src/main/java/com/flashsale/inventory/application \
+  services/inventory-service/src/test/java/com/flashsale/inventory/application
+```
+
+Result: build successful in 19s; 55 tests passed; application-to-infrastructure import
+scan returned no matches; no save/fallback/retry/warm implementation; classes packaged.
+
+Non-failing build warnings observed:
+
+- Gradle reported deprecated features that will be incompatible with Gradle 9.0.
+- Test JVM reported class-data-sharing limitation after Mockito appended to the bootstrap
+  classpath.
+
+Neither warning caused a test or build failure.
+
+---
+
+### Final test inventory
+
+| Test class | Tests | Result |
+|---|---:|---|
+| `ProductTest` | 10 | PASS |
+| `StockLevelTest` | 6 | PASS |
+| `StockCountTest` | 7 | PASS |
+| `TypedIdTest` | 4 | PASS |
+| `ProductPersistenceMapperTest` | 3 | PASS |
+| `ProductRepositoryTest` | 3 | PASS |
+| `RedisScriptConfigurationTest` | 1 | PASS |
+| `StockDecrementLuaExecutorTest` | 5 | PASS |
+| `RedisStockDecrementAdapterTest` | 5 | PASS |
+| `StockCounterServiceTest` | 11 | PASS |
+| **Total** | **55** | **55 passed, 0 failed, 0 skipped** |
+
+All tests are unit tests. No Testcontainers, live PostgreSQL, live Redis, concurrent
+integration, or full Spring Boot application-context test exists yet.
+
+---
+
+### Unresolved assumptions and risks
+
+1. **Optimistic-lock update behavior is not proven against Hibernate/PostgreSQL.**
+   Product increments its domain version on allocation. ProductPersistenceMapper writes
+   that value into a JPA `@Version` field. Unit tests verify round-trip values, but no real
+   detached-update test proves that Hibernate will accept the intended version transition
+   rather than treat the incremented detached value as stale. This must be resolved with an
+   integration test before optimistic locking is considered production-correct.
+
+2. **ProductRepository load on every decrement conflicts with the stated Redis hot path.**
+   The approved StockCounterService contract requires loading Product and resolving its
+   StockLevel before calling Redis. This introduces PostgreSQL work on every decrement,
+   while architecture documents describe Redis as shielding PostgreSQL from flash-sale
+   traffic. Do not silently remove the aggregate load; obtain an explicit architecture
+   decision after measuring/clarifying the intended hot path.
+
+3. **PostgreSQL fallback cannot yet mutate StockLevel through the aggregate.**
+   StockLevel is immutable and Product currently exposes allocation only. A fallback
+   decrement with row locking will need either an explicitly approved Product/StockLevel
+   domain command or an explicitly approved repository-level atomic operation. Implementing
+   SQL mutation directly today would bypass the aggregate contract.
+
+4. **`PROJECT_TRUTH.md` is stale.**
+   The original session decision requires updating it to repository reality, including the
+   completed Week 2 skeleton and current Week 3 state. That document was not modified because
+   every implementation request limited each slice. It remains an approved documentation task.
+
+5. **Legacy architecture documents disagree with the approved minimal model.**
+   DatabaseSchema.md describes Product metadata (`name`, `sku`, price, currency, timestamps)
+   and Redis/reconciliation columns that do not exist in the approved domain/JPA/V1 schema.
+   The migration intentionally follows repository reality. Do not add legacy columns without
+   a new model decision.
+
+6. **Old Week 3 DoD references `stock_reservation_log`.**
+   The approved V1 migration explicitly excludes audit/log tables, and no such JPA entity
+   exists. PostgreSQL fallback must not invent this table without explicit approval.
+
+7. **No live Lua correctness proof exists.**
+   Script loading, SHA, key/argument wiring, and delegation are tested, but the approved
+   script has not been executed against real Redis in this session.
+
+8. **Port nullability is asymmetric by design today.**
+   StockDecrementPort returns nullable `Long`; executor and adapter pass null through;
+   StockCounterService rejects null as an illegal infrastructure result.
+
+9. **Application errors are not API contracts.**
+   Missing Product/StockLevel currently throws `NoSuchElementException`; invalid quantity
+   throws `IllegalArgumentException`; invalid infrastructure output throws
+   `IllegalStateException`. No REST handler or stable external error code exists or is in scope.
+
+10. **Existing pre-warm/release/reconcile Lua files predate this implementation.**
+    Only `stock-decrement.lua` is integrated. Presence in resources does not mean the other
+    scripts are implemented or approved for use.
+
+---
+
+### Intentionally deferred or excluded
+
+- Redis pre-warm integration and scheduling
+- PostgreSQL fallback
+- Pessimistic repository locking / `SELECT FOR UPDATE`
+- Redis re-warming after a miss or fallback
+- Live Redis integration tests
+- PostgreSQL/Testcontainers integration tests
+- Concurrent oversell/correctness/property tests
+- Reservation aggregate, tables, endpoints, expiry, or idempotency (Week 4)
+- Release and reconciliation integration
+- Kafka producer/consumer/event publication
+- Inventory GET endpoint or any REST controller/DTO
+- Stock reservation log/audit table
+- PROJECT_TRUTH.md update
+- SaleService changes
+
+Existing `stock-release.lua` and `stock-reconcile.lua` remain unused and are not part of
+remaining Week 3 implementation unless scope is explicitly expanded.
+
+---
+
+### Exact remaining Week 3 tasks
+
+The next engineer must not treat Week 3 as complete. The remaining approved implementation
+work, in dependency order, is:
+
+1. **Redis pre-warm slice**
+   - Integrate existing `lua/stock-prewarm.lua`.
+   - Add script configuration, executor, Redis-neutral port, adapter, and focused unit tests.
+   - Use keys `stock:{saleId}` and `stock:warmed:{saleId}` on the same Redis hash slot.
+   - Pass total stock and TTL.
+   - Preserve the approved return contract: `1 = warmed`, `0 = already warmed`.
+   - Define/approve the orchestration input needed to calculate TTL as
+     `saleEnd - now + 600 seconds`; Inventory's current Product/StockLevel model has no sale
+     end timestamp.
+   - Do not implement release or reconciliation while doing this.
+
+2. **Pre-warm trigger/orchestration decision**
+   - The old build plan says schedule pre-warm 60 seconds before sale start, but Inventory
+     has no SaleWindow and Kafka is excluded.
+   - Decide explicitly how Inventory learns SaleId, total stock, sale start/end, and when the
+     pre-warm call is triggered. Do not invent Kafka or an endpoint.
+
+3. **PostgreSQL fallback domain contract**
+   - Resolve whether Product/StockLevel receives an approved decrement command or whether a
+     repository-level atomic mutation is exceptionally allowed.
+   - Preserve non-negative stock, Product ownership, and current <= total allocation.
+   - Define the result contract for cache miss plus fallback success/sold-out.
+   - Do not add `stock_reservation_log` under the current schema approval.
+
+4. **Repository locking**
+   - Add the minimal Product-owned StockLevel lookup/update needed for fallback.
+   - Use a real transaction and PostgreSQL pessimistic row lock (`SELECT ... FOR UPDATE` /
+     Spring `PESSIMISTIC_WRITE`).
+   - Keep the Product + Sale uniqueness invariant.
+   - Verify optimistic/pessimistic version behavior against real PostgreSQL.
+   - Do not expose an unrestricted child repository.
+
+5. **Wire fallback into StockCounterService**
+   - On `CacheMiss` or Redis connectivity failure, invoke the approved PostgreSQL fallback.
+   - Maintain exactly one authoritative decrement.
+   - Do not guess stock.
+   - Redis re-warming remains deferred unless separately approved.
+
+6. **Correctness and integration tests**
+   - Execute `stock-decrement.lua` against real Redis.
+   - Verify return codes `-2`, `-1`, and non-negative across boundary values.
+   - Verify stock reaches zero and never becomes negative.
+   - Verify quantity decrement and insufficient-stock behavior.
+   - Add concurrent decrement coverage proving no oversell.
+   - Add PostgreSQL fallback integration coverage with Redis unavailable.
+   - Add concurrent row-lock coverage proving serial, non-negative fallback decrements.
+   - Add Flyway + Hibernate validation against real inventory_db.
+   - Specifically test the unresolved Product/JPA version semantics.
+
+7. **Final Week 3 documentation reconciliation**
+   - Update `context/PROJECT_TRUTH.md` to current repository reality.
+   - Record which old Build-Plan/DatabaseSchema statements are obsolete.
+   - Mark Week 3 complete only after pre-warm, fallback, locking, and correctness tests pass.
+
+Not remaining Week 3 work: Kafka, Inventory GET endpoint, Reservation/Week 4, Release, or
+Reconciliation.
+
+---
+
+### Git state at session end
+
+Implementation commits created during this conversation:
+
+| Commit | Description |
+|---|---|
+| `0444c9b` | InventoryService module skeleton |
+| `213570a` | Framework-free Inventory domain model |
+| `eecc75c` | Persistence, V1 migration, Lua integration, and Redis adapter layer |
+| `2a22457` | ProductRepository application port and StockCounterService |
+
+Before this SESSION_LOG append:
+
+- Branch: `main`
+- HEAD: `2a22457`
+- `origin/main`: `2a22457`
+- Working tree: clean
+- InventoryService: 19 production classes/interfaces, 10 test classes, 55 passing tests
+- Week 3 status: incomplete; remaining work is listed above
+
+This SESSION_LOG append is the only working-tree modification made after `2a22457`.

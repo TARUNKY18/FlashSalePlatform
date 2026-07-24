@@ -1,128 +1,112 @@
 # CURRENT_STATE.md
-**Milestone:** Week 2 — SaleService Skeleton
-**Status:** ✅ COMPLETE
-**Date:** 2026-07-03
+**Milestone:** Week 3 — InventoryService
+**Status:** 🟡 IN PROGRESS
+**Date:** 2026-07-24
 **Engineer:** Tarun K Y
+
+---
+
+## Current Status
+
+| Item | Verified state |
+|---|---|
+| Branch | `main` |
+| Latest commit | `2a22457` — `Week3: Complete StockCounterService` |
+| Build | `BUILD SUCCESSFUL` in 22s |
+| Tests | 55 passed, 0 failed, 0 skipped |
 
 ---
 
 ## Completed Work
 
-**SaleService module (38 files):**
-
-- **Domain layer** — `domain/{aggregate,entity,vo,event,exception}/`
-  - `FlashSale` aggregate root with sealed `SaleStatus` (Scheduled/Active/Ended/Archived)
-  - `SaleSchedule` entity, `SaleWindow` value object
-  - `SaleId`, `ProductId`, `EndReason` typed identifiers and enums
-  - Four domain events: `SaleScheduled`, `SaleStarted`, `SaleEnded`, `SaleArchived`
-  - `SaleCreationException` with error codes EC-002/003/004 per PRD
-
-- **Application layer** — `application/`
-  - `SaleCommandService.createSale()` — creates sale in SCHEDULED status
-  - `SaleQueryService.getById()` — retrieves sale by ID
-  - `CreateSaleCommand` DTO, `SaleNotFoundException`
-
-- **Infra/persistence layer** — `infra/{persistence,config}/`
-  - `FlashSaleJpaEntity`, `SaleScheduleJpaEntity`, `SaleStatusHistoryJpaEntity` — JPA mappings
-  - `SaleRepository` — sealed-status↔VARCHAR translation, domain↔JPA reconstruction
-  - `SpringDataFlashSaleRepository`, `SpringDataSaleScheduleRepository`, `SpringDataSaleStatusHistoryRepository`
-  - `ClockConfig` — provides injectable `Clock` bean for testable time
-
-- **API layer** — `api/{,dto}/`
-  - `SaleController` — `POST /api/v1/sales` (201), `GET /api/v1/sales/{id}` (200 or 404)
-  - `CreateSaleRequest`, `SaleResponse`, `ErrorResponse` DTOs
-  - `GlobalExceptionHandler` — maps domain/application exceptions to HTTP responses with PRD error codes
-
-- **Configuration & schema**
-  - `application.yml` — port 8081, virtual threads enabled, Flyway + Postgres config
-  - `src/main/resources/db/migration/V1__init.sql` — creates `flash_sales`, `sale_schedules`, `sale_status_history` tables with indexes and triggers
-
-- **Tests** — 12 total
-  - `FlashSaleStateMachineTest` — 10 tests (4 valid transitions, 4 illegal transitions, 2 supplementary creation-validation)
-  - `SaleControllerTest` — 4 slice tests (201 create, 400 validation, 404 not found)
-
-**Gradle multi-module setup:**
-- Root `settings.gradle` and `build.gradle` with Java 21 toolchain config
-- `gradle/wrapper/` with Gradle 8.10 wrapper (gradlew executable, gradle-wrapper.jar, properties)
-- `services/sale-service/build.gradle` with Spring Boot 3.3.4, Data JPA, Validation, Flyway, PostgreSQL driver
+| Slice | Current implementation |
+|---|---|
+| ✔ InventoryService Skeleton | Gradle module; Java 21; Spring Boot 3.3.4; virtual threads; PostgreSQL, JPA, Flyway, Redis Cluster, and Actuator configuration |
+| ✔ Inventory Domain | Framework-free Product aggregate, Product-owned StockLevel, StockCount, ProductId, SaleId, and StockLevelId |
+| ✔ Inventory Persistence | Separate JPA entities, isolated mapper, ProductRepository application port and JPA adapter, entity-graph loading, optimistic versions |
+| ✔ Inventory Flyway Migration | `products` and `stock_levels` with PK, FK, stock/version checks, and unique Product + Sale allocation |
+| ✔ Redis Lua Integration | Approved `stock-decrement.lua`, singleton typed script bean, SHA caching, and Lua executor |
+| ✔ Redis Adapter | Redis-neutral StockDecrementPort and decision-free Redis adapter |
+| ✔ StockCounterService | Product-owned allocation validation and mapping of cache miss, sold out, and successful decrement outcomes |
 
 ---
 
 ## Verification
 
-**Build:**
-```
-./gradlew :services:sale-service:build
-BUILD SUCCESSFUL in 32s (8 actionable tasks)
-```
-
-**Tests:**
-```
-./gradlew :services:sale-service:test --rerun-tasks
-BUILD SUCCESSFUL in 12s (4 executed)
-12 tests passed:
-  FlashSaleStateMachineTest: 10 tests PASSED
-  SaleControllerTest: 4 tests PASSED
+```text
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+BUILD SUCCESSFUL in 22s
+55 tests passed, 0 failed, 0 skipped
 ```
 
----
-
-## State Machine (Implemented)
-
-```
-SCHEDULED → ACTIVE → ENDED → ARCHIVED
-  ↑          ↓         ↓        ↑
-illegal    valid     valid    valid
-transitions are guarded by IllegalStateException
-```
-
-Transitions implemented as methods on aggregate:
-- `FlashSale.schedule(...)` — factory method, validates EC-002/003/004
-- `activate(Instant now)` — SCHEDULED → ACTIVE
-- `end(Instant now, EndReason reason)` — ACTIVE → ENDED
-- `archive(Instant now)` — ENDED → ARCHIVED
+All InventoryService tests are unit tests.
 
 ---
 
 ## Database
 
-**`sales_db`:**
-- `flash_sales` — aggregate root, 7 nullable milestone timestamps (scheduled_at always set, others null until transition)
-- `sale_schedules` — entity, sale_start/sale_end window per sale
-- `sale_status_history` — immutable audit log, one row per state transition (from_status null for initial SCHEDULED entry)
-
-All migrations applied via Flyway V1.
+`inventory_db` contains only `products` and Product-owned `stock_levels`.
+`(product_id, sale_id)` is unique. No Reservation, release, reconciliation,
+audit, outbox, Kafka, or Week 4 table exists.
 
 ---
 
-## Open Issues
+## Architecture Locked
 
-| ID | Description | Priority | Target |
-|---|---|---|---|
-| P7 | `lua-time-limit 5000ms` too high in redis-node.conf | Medium | Before Week 3 |
-| S2 | All ports bind `0.0.0.0` — should be `127.0.0.1` | Low | Week 2 cleanup |
-| M14 | `sleep 5` in Makefile too short for cold starts | Low | Week 2 cleanup |
+- SaleService retains `SCHEDULED → ACTIVE → ENDED → ARCHIVED`.
+- Hexagonal boundaries: domain, application/ports, infrastructure.
+- Product exclusively owns StockLevels; no independent StockLevel repository.
+- Domain remains free of Spring, JPA, Hibernate, Redis, and Kafka.
+- Typed IDs remain at domain/application boundaries; SaleId stays opaque.
+- JPA entities remain separate; ProductPersistenceMapper owns translation.
+- Flyway owns schema changes; Hibernate remains `ddl-auto: validate`.
+- Product and StockLevel retain optimistic version mapping.
+- Redis decrement remains atomic Lua using `stock:{saleId}`.
+- Lua results remain `-2` cache miss, `-1` sold out, or non-negative stock.
+- Executor and Redis adapter remain business-decision-free.
+- Application services depend on ports and access StockLevel through Product.
+- No Kafka, Inventory REST API, Reservation, release, or reconciliation is in scope.
 
 ---
 
-## Current Branch
+## Important Invariants
 
-```
-main
-Last commit: Week 2: SaleService skeleton — FlashSale aggregate, 12 tests passing, Gradle 8.10 wrapper
-```
+- SaleService status transitions cannot skip or reverse states.
+- StockCount, Product stock, and current stock are never negative.
+- Allocation is positive and total allocations never exceed Product stock.
+- At most one StockLevel exists per Product + Sale.
+- Every StockLevel belongs to its Product and has
+  `currentStock <= totalAllocated`.
+- Product and StockLevel versions are never negative.
+- Failed allocations do not mutate Product or increment its version.
+- Redis decrement is never replaced by a client-side read/check/write sequence.
+- Any fallback must perform exactly one authoritative decrement.
 
 ---
 
-## Next Milestone
+## Known Risks
 
-**Week 3 — InventoryService Skeleton**
+- Product/JPA version updates are not verified against real PostgreSQL.
+- StockCounterService currently loads Product before every Redis decrement.
+- No approved domain decrement command exists for PostgreSQL fallback.
+- Lua has not been executed against live Redis in tests.
+- No live infrastructure or concurrent correctness tests exist.
+- `PROJECT_TRUTH.md` and `REPOSITORY_INDEX.md` remain stale.
 
-- Spring Boot 3 project with Java 21
-- `Inventory` aggregate with `Stock` value object
-- Redis hot-path cache for `GET /api/v1/inventory/{productId}`
-- Lua scripts for atomic stock operations (decrement, release, prewarm)
-- Kafka consumer wiring (listen to domain events from `sale-events`)
-- Flyway V1 migration for `inventory_db`
-- Unit tests covering concurrency via Lua atomicity
-- **Done when:** `./gradlew :services:inventory-service:build` succeeds, 8+ tests passing
+---
+
+## Remaining Week 3 Work
+
+- ➡ PostgreSQL Fallback
+- ➡ Redis Re-warming
+- ➡ Pre-warm Use Case
+- ➡ Property-based Tests
+- ➡ Failure Tests
+- ➡ Regression Tests
+
+---
+
+## Next Recommended Task
+
+**PostgreSQL Fallback:** implement the Product-owned, transactionally locked
+fallback decrement behind an application port. Do not add Redis re-warming or pre-warm.
