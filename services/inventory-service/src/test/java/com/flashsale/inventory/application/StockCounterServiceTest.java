@@ -13,6 +13,8 @@ import static org.mockito.Mockito.when;
 
 import com.flashsale.inventory.application.port.ProductRepository;
 import com.flashsale.inventory.application.port.StockDecrementPort;
+import com.flashsale.inventory.application.port.StockDecrementUnavailableException;
+import com.flashsale.inventory.application.port.StockFallbackPort;
 import com.flashsale.inventory.domain.aggregate.Product;
 import com.flashsale.inventory.domain.vo.ProductId;
 import com.flashsale.inventory.domain.vo.SaleId;
@@ -35,8 +37,13 @@ class StockCounterServiceTest {
 
     private final ProductRepository productRepository = mock(ProductRepository.class);
     private final StockDecrementPort stockDecrementPort = mock(StockDecrementPort.class);
+    private final StockFallbackPort stockFallbackPort = mock(StockFallbackPort.class);
     private final StockCounterService service =
-            new StockCounterService(productRepository, stockDecrementPort);
+            new StockCounterService(
+                    productRepository,
+                    stockDecrementPort,
+                    stockFallbackPort
+            );
 
     @Test
     void mapsSuccessfulDecrementToRemainingStock() {
@@ -51,6 +58,7 @@ class StockCounterServiceTest {
         verify(productRepository).findById(PRODUCT_ID);
         verify(stockDecrementPort).decrement(SALE_ID, 3);
         verify(productRepository, never()).save(any());
+        verifyNoInteractions(stockFallbackPort);
     }
 
     @Test
@@ -62,18 +70,58 @@ class StockCounterServiceTest {
 
         assertInstanceOf(StockDecrementResult.SoldOut.class, result);
         verify(productRepository, never()).save(any());
+        verifyNoInteractions(stockFallbackPort);
     }
 
     @Test
-    void exposesCacheMissWithoutFallbackRetryOrPersistence() {
+    void fallsBackOnceOnCacheMissAndReturnsDurableRemainingStock() {
         arrangeProductWithAllocation();
         when(stockDecrementPort.decrement(SALE_ID, 1)).thenReturn(-2L);
+        when(stockFallbackPort.decrement(PRODUCT_ID, SALE_ID, 1))
+                .thenReturn(Optional.of(StockCount.of(41)));
 
         StockDecrementResult result = service.decrement(PRODUCT_ID, SALE_ID, 1);
 
-        assertInstanceOf(StockDecrementResult.CacheMiss.class, result);
+        StockDecrementResult.Decremented decremented =
+                assertInstanceOf(StockDecrementResult.Decremented.class, result);
+        assertEquals(StockCount.of(41), decremented.remainingStock());
         verify(stockDecrementPort, times(1)).decrement(SALE_ID, 1);
+        verify(stockFallbackPort, times(1)).decrement(PRODUCT_ID, SALE_ID, 1);
         verify(productRepository, never()).save(any());
+    }
+
+    @Test
+    void mapsFallbackInsufficientStockToSoldOut() {
+        arrangeProductWithAllocation();
+        when(stockDecrementPort.decrement(SALE_ID, 3)).thenReturn(-2L);
+        when(stockFallbackPort.decrement(PRODUCT_ID, SALE_ID, 3))
+                .thenReturn(Optional.empty());
+
+        StockDecrementResult result = service.decrement(PRODUCT_ID, SALE_ID, 3);
+
+        assertInstanceOf(StockDecrementResult.SoldOut.class, result);
+        verify(stockDecrementPort, times(1)).decrement(SALE_ID, 3);
+        verify(stockFallbackPort, times(1)).decrement(PRODUCT_ID, SALE_ID, 3);
+    }
+
+    @Test
+    void fallsBackOnceWhenPrimaryCounterIsUnavailable() {
+        arrangeProductWithAllocation();
+        when(stockDecrementPort.decrement(SALE_ID, 2))
+                .thenThrow(new StockDecrementUnavailableException(
+                        "unavailable",
+                        new RuntimeException("connection failed")
+                ));
+        when(stockFallbackPort.decrement(PRODUCT_ID, SALE_ID, 2))
+                .thenReturn(Optional.of(StockCount.of(38)));
+
+        StockDecrementResult result = service.decrement(PRODUCT_ID, SALE_ID, 2);
+
+        StockDecrementResult.Decremented decremented =
+                assertInstanceOf(StockDecrementResult.Decremented.class, result);
+        assertEquals(StockCount.of(38), decremented.remainingStock());
+        verify(stockDecrementPort, times(1)).decrement(SALE_ID, 2);
+        verify(stockFallbackPort, times(1)).decrement(PRODUCT_ID, SALE_ID, 2);
     }
 
     @Test
@@ -86,6 +134,7 @@ class StockCounterServiceTest {
         );
 
         verifyNoInteractions(stockDecrementPort);
+        verifyNoInteractions(stockFallbackPort);
     }
 
     @Test
@@ -99,6 +148,7 @@ class StockCounterServiceTest {
         );
 
         verifyNoInteractions(stockDecrementPort);
+        verifyNoInteractions(stockFallbackPort);
     }
 
     @ParameterizedTest
@@ -112,6 +162,7 @@ class StockCounterServiceTest {
         );
 
         verifyNoInteractions(stockDecrementPort);
+        verifyNoInteractions(stockFallbackPort);
     }
 
     @Test
@@ -123,6 +174,8 @@ class StockCounterServiceTest {
                 IllegalStateException.class,
                 () -> service.decrement(PRODUCT_ID, SALE_ID, 1)
         );
+
+        verifyNoInteractions(stockFallbackPort);
     }
 
     @Test
@@ -134,6 +187,8 @@ class StockCounterServiceTest {
                 IllegalStateException.class,
                 () -> service.decrement(PRODUCT_ID, SALE_ID, 1)
         );
+
+        verifyNoInteractions(stockFallbackPort);
     }
 
     @Test
@@ -146,6 +201,23 @@ class StockCounterServiceTest {
                 IllegalStateException.class,
                 () -> service.decrement(PRODUCT_ID, SALE_ID, 1)
         );
+
+        verifyNoInteractions(stockFallbackPort);
+    }
+
+    @Test
+    void rejectsNullFallbackResult() {
+        arrangeProductWithAllocation();
+        when(stockDecrementPort.decrement(SALE_ID, 1)).thenReturn(-2L);
+        when(stockFallbackPort.decrement(PRODUCT_ID, SALE_ID, 1)).thenReturn(null);
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> service.decrement(PRODUCT_ID, SALE_ID, 1)
+        );
+
+        verify(stockDecrementPort, times(1)).decrement(SALE_ID, 1);
+        verify(stockFallbackPort, times(1)).decrement(PRODUCT_ID, SALE_ID, 1);
     }
 
     private void arrangeProductWithAllocation() {

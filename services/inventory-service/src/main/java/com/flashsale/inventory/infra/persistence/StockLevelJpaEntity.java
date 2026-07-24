@@ -73,6 +73,15 @@ public class StockLevelJpaEntity {
         this.product = owner;
     }
 
+    void updateCurrentStock(int currentStock) {
+        if (currentStock < 0 || currentStock > totalAllocated) {
+            throw new IllegalArgumentException(
+                    "currentStock must be between zero and totalAllocated"
+            );
+        }
+        this.currentStock = currentStock;
+    }
+
     public UUID getId() {
         return id;
     }

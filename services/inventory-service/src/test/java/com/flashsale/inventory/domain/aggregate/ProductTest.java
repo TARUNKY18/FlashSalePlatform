@@ -9,7 +9,10 @@ import com.flashsale.inventory.domain.entity.StockLevel;
 import com.flashsale.inventory.domain.vo.ProductId;
 import com.flashsale.inventory.domain.vo.SaleId;
 import com.flashsale.inventory.domain.vo.StockCount;
+import com.flashsale.inventory.domain.vo.StockLevelId;
 import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -181,5 +184,70 @@ class ProductTest {
                         0L
                 )
         );
+    }
+
+    @Test
+    void decrementsOwnedStockAndAdvancesOnlyStockLevelVersion() {
+        Product product = Product.create(PRODUCT_ID, StockCount.of(100));
+        product.allocateStock(FIRST_SALE_ID, StockCount.of(40));
+
+        Optional<StockCount> result = product.decrementStock(FIRST_SALE_ID, 3);
+
+        assertEquals(Optional.of(StockCount.of(37)), result);
+        StockLevel stockLevel = product.stockLevelFor(FIRST_SALE_ID).orElseThrow();
+        assertEquals(StockCount.of(37), stockLevel.currentStock());
+        assertEquals(1L, stockLevel.version());
+        assertEquals(1L, product.version());
+    }
+
+    @Test
+    void insufficientCurrentStockDoesNotMutateOwnedStockLevel() {
+        StockLevel stockLevel = StockLevel.reconstitute(
+                StockLevelId.generate(),
+                PRODUCT_ID,
+                FIRST_SALE_ID,
+                StockCount.of(40),
+                StockCount.of(2),
+                7L
+        );
+        Product product = Product.reconstitute(
+                PRODUCT_ID,
+                StockCount.of(100),
+                List.of(stockLevel),
+                3L
+        );
+
+        Optional<StockCount> result = product.decrementStock(FIRST_SALE_ID, 3);
+
+        assertTrue(result.isEmpty());
+        StockLevel unchanged = product.stockLevelFor(FIRST_SALE_ID).orElseThrow();
+        assertEquals(StockCount.of(2), unchanged.currentStock());
+        assertEquals(7L, unchanged.version());
+        assertEquals(3L, product.version());
+    }
+
+    @Test
+    void rejectsDecrementForMissingOwnedStockLevel() {
+        Product product = Product.create(PRODUCT_ID, StockCount.of(100));
+
+        assertThrows(
+                NoSuchElementException.class,
+                () -> product.decrementStock(FIRST_SALE_ID, 1)
+        );
+    }
+
+    @Test
+    void rejectsNonPositiveDecrementWithoutMutation() {
+        Product product = Product.create(PRODUCT_ID, StockCount.of(100));
+        product.allocateStock(FIRST_SALE_ID, StockCount.of(40));
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> product.decrementStock(FIRST_SALE_ID, 0)
+        );
+
+        StockLevel unchanged = product.stockLevelFor(FIRST_SALE_ID).orElseThrow();
+        assertEquals(StockCount.of(40), unchanged.currentStock());
+        assertEquals(0L, unchanged.version());
     }
 }

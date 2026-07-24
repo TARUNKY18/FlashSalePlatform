@@ -7,6 +7,7 @@ import com.flashsale.inventory.domain.vo.SaleId;
 import com.flashsale.inventory.domain.vo.StockCount;
 import com.flashsale.inventory.domain.vo.StockLevelId;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Objects;
 import org.springframework.stereotype.Component;
 
@@ -43,6 +44,48 @@ public class ProductPersistenceMapper {
                 stockLevels,
                 entity.getVersion()
         );
+    }
+
+    /**
+     * Applies the current stock of one owned domain StockLevel to its managed JPA entity.
+     *
+     * <p>JPA remains responsible for advancing the persisted optimistic version when the
+     * surrounding transaction flushes.
+     */
+    public void applyCurrentStock(
+            Product product,
+            ProductJpaEntity productEntity,
+            SaleId saleId
+    ) {
+        Product aggregate = Objects.requireNonNull(product, "product must not be null");
+        ProductJpaEntity entity = Objects.requireNonNull(
+                productEntity,
+                "productEntity must not be null"
+        );
+        Objects.requireNonNull(saleId, "saleId must not be null");
+        if (!aggregate.id().value().equals(entity.getId())) {
+            throw new IllegalArgumentException(
+                    "Domain Product and JPA Product identities must match"
+            );
+        }
+
+        StockLevel domainStockLevel = aggregate.stockLevelFor(saleId)
+                .orElseThrow(() -> new NoSuchElementException(
+                        "Product " + aggregate.id()
+                                + " has no StockLevel for sale " + saleId
+                ));
+        StockLevelJpaEntity jpaStockLevel = entity.getStockLevels().stream()
+                .filter(stockLevel -> stockLevel.getId().equals(
+                        domainStockLevel.id().value()
+                ))
+                .filter(stockLevel -> stockLevel.getSaleId().equals(saleId.value()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "Managed Product " + aggregate.id()
+                                + " does not contain the expected StockLevel for sale "
+                                + saleId
+                ));
+        jpaStockLevel.updateCurrentStock(domainStockLevel.currentStock().value());
     }
 
     private StockLevelJpaEntity toJpaEntity(StockLevel stockLevel) {

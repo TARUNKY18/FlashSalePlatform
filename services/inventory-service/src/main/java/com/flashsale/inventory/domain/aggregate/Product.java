@@ -8,6 +8,7 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -15,8 +16,9 @@ import java.util.Optional;
  * Aggregate root that owns all sale allocations for one product.
  *
  * <p>The aggregate treats every owned {@link StockLevel} as an active allocation because
- * InventoryContext deliberately does not know the SaleContext lifecycle. Allocation is the
- * only mutation in the current scope; release and reconciliation belong to later work.
+ * InventoryContext deliberately does not know the SaleContext lifecycle. Allocation and
+ * the approved durable fallback decrement are the only mutations in the current scope;
+ * release and reconciliation belong to later work.
  */
 public final class Product {
 
@@ -98,6 +100,42 @@ public final class Product {
         stockLevelsBySale.put(saleId, stockLevel);
         version = nextVersion;
         return stockLevel;
+    }
+
+    /**
+     * Attempts to decrement the StockLevel owned for a sale.
+     *
+     * <p>An empty result means the currently available stock is insufficient. The aggregate
+     * remains unchanged in that case. A successful decrement replaces the immutable owned
+     * StockLevel and advances only that entity's version.
+     */
+    public Optional<StockCount> decrementStock(SaleId saleId, int quantity) {
+        Objects.requireNonNull(saleId, "saleId must not be null");
+        if (quantity <= 0) {
+            throw new IllegalArgumentException(
+                    "Stock quantity must be positive: " + quantity
+            );
+        }
+
+        StockLevel stockLevel = Optional.ofNullable(stockLevelsBySale.get(saleId))
+                .orElseThrow(() -> new NoSuchElementException(
+                        "Product " + id + " has no StockLevel for sale " + saleId
+                ));
+        if (!stockLevel.currentStock().canDecrement(quantity)) {
+            return Optional.empty();
+        }
+
+        StockCount remainingStock = stockLevel.currentStock().decrement(quantity);
+        StockLevel decrementedStockLevel = StockLevel.reconstitute(
+                stockLevel.id(),
+                stockLevel.productId(),
+                stockLevel.saleId(),
+                stockLevel.totalAllocated(),
+                remainingStock,
+                Math.incrementExact(stockLevel.version())
+        );
+        stockLevelsBySale.put(saleId, decrementedStockLevel);
+        return Optional.of(remainingStock);
     }
 
     private void addExistingStockLevel(StockLevel stockLevel) {

@@ -2,6 +2,8 @@ package com.flashsale.inventory.application;
 
 import com.flashsale.inventory.application.port.ProductRepository;
 import com.flashsale.inventory.application.port.StockDecrementPort;
+import com.flashsale.inventory.application.port.StockDecrementUnavailableException;
+import com.flashsale.inventory.application.port.StockFallbackPort;
 import com.flashsale.inventory.domain.aggregate.Product;
 import com.flashsale.inventory.domain.entity.StockLevel;
 import com.flashsale.inventory.domain.vo.ProductId;
@@ -9,14 +11,15 @@ import com.flashsale.inventory.domain.vo.SaleId;
 import com.flashsale.inventory.domain.vo.StockCount;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.Optional;
 import org.springframework.stereotype.Service;
 
 /**
  * Orchestrates one stock-decrement attempt through application ports.
  *
  * <p>The Product aggregate remains the authority for allocation ownership and quantity
- * bounds. This service does not implement fallback, retries, pre-warming, or persistence
- * updates after Redis execution.
+ * bounds. A cache miss or unavailable primary counter delegates once to the durable
+ * fallback. This service does not retry, re-warm, or pre-warm Redis.
  */
 @Service
 public class StockCounterService {
@@ -26,13 +29,16 @@ public class StockCounterService {
 
     private final ProductRepository productRepository;
     private final StockDecrementPort stockDecrementPort;
+    private final StockFallbackPort stockFallbackPort;
 
     public StockCounterService(
             ProductRepository productRepository,
-            StockDecrementPort stockDecrementPort
+            StockDecrementPort stockDecrementPort,
+            StockFallbackPort stockFallbackPort
     ) {
         this.productRepository = productRepository;
         this.stockDecrementPort = stockDecrementPort;
+        this.stockFallbackPort = stockFallbackPort;
     }
 
     public StockDecrementResult decrement(
@@ -59,12 +65,17 @@ public class StockCounterService {
             );
         }
 
-        Long rawResult = stockDecrementPort.decrement(saleId, quantity);
+        Long rawResult;
+        try {
+            rawResult = stockDecrementPort.decrement(saleId, quantity);
+        } catch (StockDecrementUnavailableException exception) {
+            return fallback(productId, saleId, quantity);
+        }
         if (rawResult == null) {
             throw new IllegalStateException("Stock decrement port returned null");
         }
         if (rawResult == CACHE_MISS) {
-            return new StockDecrementResult.CacheMiss();
+            return fallback(productId, saleId, quantity);
         }
         if (rawResult == SOLD_OUT) {
             return new StockDecrementResult.SoldOut();
@@ -85,5 +96,23 @@ public class StockCounterService {
                     exception
             );
         }
+    }
+
+    private StockDecrementResult fallback(
+            ProductId productId,
+            SaleId saleId,
+            int quantity
+    ) {
+        Optional<StockCount> remainingStock = stockFallbackPort.decrement(
+                productId,
+                saleId,
+                quantity
+        );
+        if (remainingStock == null) {
+            throw new IllegalStateException("Stock fallback port returned null");
+        }
+        return remainingStock
+                .<StockDecrementResult>map(StockDecrementResult.Decremented::new)
+                .orElseGet(StockDecrementResult.SoldOut::new);
     }
 }

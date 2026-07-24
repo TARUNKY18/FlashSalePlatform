@@ -4,10 +4,11 @@ import com.flashsale.inventory.domain.vo.StockCount;
 import java.util.Objects;
 
 /**
- * Application-level outcome of one Redis stock-decrement attempt.
+ * Application-level outcome of one stock-decrement attempt.
  *
- * <p>A cache miss is exposed as an outcome because PostgreSQL fallback and Redis re-warming
- * are intentionally outside the current implementation slice.
+ * <p>The cache-miss variant remains part of the established result vocabulary, while
+ * StockCounterService now resolves cache misses through the durable fallback before
+ * returning to its caller.
  */
 public sealed interface StockDecrementResult
         permits StockDecrementResult.Decremented,
