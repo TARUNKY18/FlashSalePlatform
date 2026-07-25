@@ -1608,3 +1608,210 @@ Remaining Week 3 work:
 
 Kafka, Inventory REST, Reservation/Week 4, retry logic, release, and
 reconciliation remain excluded.
+
+---
+
+## SESSION-005
+**Date:** 2026-07-25
+**Milestone:** Week 3 — Redis Re-warming
+**Outcome:** COMPLETE
+**Engineer:** Tarun K Y
+**Branch:** `main`
+**Implementation commit:** `10069d8` (`feat(inventory): add Redis re-warming after PostgreSQL fallback`)
+
+---
+
+### Objective and governing scope
+
+Implement only safe Redis re-warming after a successful authoritative
+PostgreSQL fallback.
+
+Required behavior:
+
+- Re-warm only after a present `StockFallbackPort` result.
+- Use the durable remaining `StockCount`; never guess stock.
+- Never overwrite a Redis counter restored or decremented by another request.
+- Keep re-warming behind an application-owned port and Redis infrastructure
+  adapter.
+- Preserve the committed PostgreSQL success if Redis remains unavailable.
+- Do not retry.
+
+Explicitly excluded:
+
+- Redis pre-warm integration or scheduling
+- Domain or persistence changes
+- Flyway, SQL, Lua, Gradle, or configuration changes
+- REST/API work
+- Kafka
+- Reservation/Week 4 work
+- Release or reconciliation
+- SaleService changes
+- Unrelated refactoring
+
+---
+
+### Architecture and behavior
+
+#### Application boundary
+
+`StockRewarmPort` is the Redis-neutral outbound contract:
+
+```text
+rewarmIfAbsent(SaleId, StockCount) -> void
+```
+
+The port exposes only Inventory domain types. Its contract permits creation of a
+missing counter and forbids replacement of an existing counter.
+
+`StockRewarmUnavailableException` is the application-owned signal for Redis
+connection failure during re-warming. Redis exception types do not cross into
+application orchestration.
+
+#### Redis adapter
+
+`RedisStockRewarmAdapter` implements `StockRewarmPort` with
+`StringRedisTemplate.opsForValue().setIfAbsent`.
+
+- Key: `stock:{saleId}`.
+- Value: the remaining `StockCount` returned by the successful durable fallback.
+- The Redis write is atomic.
+- An absent key is restored.
+- An existing key is left unchanged.
+- `RedisConnectionFailureException` is translated to
+  `StockRewarmUnavailableException`.
+- No Lua script, pre-warm marker, TTL, retry, or additional Redis key was added.
+
+#### StockCounterService orchestration
+
+`StockCounterService` now:
+
+1. Preserves Product-owned validation and invokes `StockDecrementPort` at most
+   once.
+2. Invokes `StockFallbackPort` once on Redis cache miss or primary-counter
+   unavailability.
+3. Returns sold out without re-warming when fallback returns empty.
+4. Invokes `StockRewarmPort` once when fallback returns durable remaining stock.
+5. Returns the durable `Decremented` result when re-warming succeeds, finds an
+   existing counter, or is unavailable.
+
+Redis-native success and sold-out paths do not re-warm. The authoritative
+PostgreSQL decrement is never retried or reversed because cache restoration
+fails.
+
+---
+
+### Files created
+
+Production:
+
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/port/StockRewarmPort.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/port/StockRewarmUnavailableException.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/redis/RedisStockRewarmAdapter.java`
+
+Tests:
+
+- `services/inventory-service/src/test/java/com/flashsale/inventory/infra/redis/RedisStockRewarmAdapterTest.java`
+
+### Files modified
+
+Production:
+
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/StockCounterService.java`
+
+Tests:
+
+- `services/inventory-service/src/test/java/com/flashsale/inventory/application/StockCounterServiceTest.java`
+
+Documentation updated after implementation:
+
+- `context/SESSION_LOG.md`
+- `context/CURRENT_STATE.md`
+- `HANDOFF.md`
+
+No domain, persistence, Flyway, Lua, Gradle, configuration, SaleService, REST,
+Kafka, Reservation, release, or reconciliation file was changed by the
+re-warming implementation.
+
+---
+
+### Tests added
+
+Four tests were added:
+
+1. `RedisStockRewarmAdapterTest.restoresMissingCounterFromDurableRemainingStock`
+2. `RedisStockRewarmAdapterTest.leavesExistingCounterUnchanged`
+3. `RedisStockRewarmAdapterTest.translatesRedisConnectionFailureToPortOwnedUnavailableSignal`
+4. `StockCounterServiceTest.returnsDurableSuccessWhenRewarmingIsUnavailable`
+
+Existing StockCounterService tests were extended to verify:
+
+- one re-warm after cache-miss fallback success;
+- one re-warm after unavailable-counter fallback success;
+- no re-warm after Redis success, Redis sold out, fallback sold out, invalid
+  input, invalid Redis output, or invalid fallback output.
+
+---
+
+### Build verification
+
+Required command:
+
+```bash
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+```
+
+Final result:
+
+```text
+BUILD SUCCESSFUL in 25s
+71 tests passed, 0 failed, 0 errors, 0 skipped
+```
+
+Final InventoryService inventory:
+
+- 25 production Java types.
+- 12 test classes.
+- 71 passing unit tests.
+
+Additional verification:
+
+- Focused StockCounterService and RedisStockRewarmAdapter tests passed.
+- `git diff --check` passed.
+- Domain and application-port framework/infrastructure import scans returned no
+  matches.
+- Application-to-infrastructure import scans returned no matches.
+- Domain, persistence, migrations, Redis Lua resources, Gradle files,
+  configuration, and SaleService remained unchanged.
+- The executable InventoryService JAR contains `StockRewarmPort`,
+  `StockRewarmUnavailableException`, and `RedisStockRewarmAdapter`.
+
+---
+
+### Remaining risks and assumptions
+
+- Redis set-if-absent behavior is unit-tested but has not been executed against
+  live Redis.
+- Concurrent fallback/re-warm races have not been verified against live Redis
+  and PostgreSQL.
+- Re-warmed counters have no TTL because Inventory has no approved sale-end
+  input. TTL ownership remains part of the separate pre-warm decision.
+- Re-warm connection failure preserves durable success but currently emits no
+  log or metric.
+- Redis failure after possible server-side decrement remains an unresolved
+  ambiguous-execution risk.
+- Product/StockLevel pessimistic and optimistic version interaction remains
+  unverified against live Hibernate/PostgreSQL.
+
+---
+
+### Remaining Week 3 roadmap
+
+1. Approve and implement the pre-warm use case and trigger/source contract.
+2. Add property-based stock correctness tests.
+3. Add live Redis/PostgreSQL failure, locking, version, and concurrency tests.
+4. Add the remaining regression tests, including ambiguous Redis execution.
+5. Reconcile `context/PROJECT_TRUTH.md`, `context/REPOSITORY_INDEX.md`, and
+   obsolete Build Plan/Database Schema statements.
+
+Week 3 remains in progress. Kafka, Inventory REST, Reservation/Week 4, retry
+logic, release, and reconciliation remain excluded.

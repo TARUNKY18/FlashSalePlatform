@@ -1,7 +1,7 @@
 # CURRENT_STATE.md
 **Milestone:** Week 3 — InventoryService
 **Status:** 🟡 IN PROGRESS
-**Date:** 2026-07-24
+**Date:** 2026-07-25
 **Engineer:** Tarun K Y
 
 ---
@@ -11,9 +11,11 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `9bb3ad7` — `feat(inventory): implement PostgreSQL fallback adapter` |
-| Build | `BUILD SUCCESSFUL` in 19s |
-| Tests | 67 passed, 0 failed, 0 skipped |
+| Latest commit | `10069d8` — `feat(inventory): add Redis re-warming after PostgreSQL fallback` |
+| Build | `BUILD SUCCESSFUL` in 25s |
+| Production types | 25 |
+| Test classes | 12 |
+| Tests | 71 passed, 0 failed, 0 skipped |
 
 ---
 
@@ -29,6 +31,7 @@
 | ✔ Redis Adapter | Redis-neutral StockDecrementPort; raw result preservation; Redis connection failures translated to an infrastructure-neutral unavailable signal |
 | ✔ StockCounterService | Product-owned allocation validation; Redis success/sold-out mapping; one fallback call on cache miss or primary-counter unavailability |
 | ✔ PostgreSQL Fallback | Product-owned domain decrement; StockFallbackPort; transactional Postgres adapter; Product-root `PESSIMISTIC_WRITE`; managed StockLevel update and flush; success/sold-out outcomes |
+| ✔ Redis Re-warming | StockRewarmPort; atomic Redis `SETNX` adapter; successful-fallback-only restoration from durable remaining stock; existing counters preserved; re-warm unavailability does not reverse durable success |
 
 ---
 
@@ -36,8 +39,8 @@
 
 ```text
 ./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
-BUILD SUCCESSFUL in 19s
-67 tests passed, 0 failed, 0 skipped
+BUILD SUCCESSFUL in 25s
+71 tests passed, 0 failed, 0 skipped
 ```
 
 All InventoryService tests are unit tests.
@@ -70,6 +73,10 @@ audit, outbox, Kafka, or Week 4 table exists.
 - PostgreSQL fallback locks the Product aggregate root with
   `PESSIMISTIC_WRITE`, mutates stock through `Product.decrementStock`, and
   persists the managed owned StockLevel in one transaction.
+- Successful fallback re-warms `stock:{saleId}` from the durable remaining
+  StockCount through `StockRewarmPort`.
+- Redis re-warming uses atomic set-if-absent, never overwrites an existing
+  counter, and remains best-effort after the durable decrement commits.
 - No Kafka, Inventory REST API, Reservation, release, or reconciliation is in scope.
 
 ---
@@ -88,6 +95,9 @@ audit, outbox, Kafka, or Week 4 table exists.
 - Cache miss or primary-counter unavailability invokes the fallback port once.
 - PostgreSQL fallback performs one authoritative decrement while holding the
   Product aggregate-root lock.
+- Only successful fallback invokes re-warming; Redis success and sold-out paths
+  do not.
+- Re-warming may create a missing counter but never overwrite an existing one.
 
 ---
 
@@ -98,6 +108,12 @@ audit, outbox, Kafka, or Week 4 table exists.
 - PostgreSQL fallback locking and version behavior are unit-tested but not
   verified against live PostgreSQL or under concurrent contention.
 - Lua has not been executed against live Redis in tests.
+- Redis set-if-absent re-warming and concurrent fallback/re-warm races are
+  unit-tested only, not verified against live Redis.
+- Re-warmed counters have no TTL because Inventory still has no approved
+  sale-end input; TTL ownership remains part of the pre-warm decision.
+- Re-warm connection failure preserves durable success but currently emits no
+  log or metric.
 - No live infrastructure or concurrent correctness tests exist.
 - `PROJECT_TRUTH.md` and `REPOSITORY_INDEX.md` remain stale.
 
@@ -105,7 +121,6 @@ audit, outbox, Kafka, or Week 4 table exists.
 
 ## Remaining Week 3 Work
 
-- ➡ Redis Re-warming
 - ➡ Pre-warm Use Case
 - ➡ Property-based Tests
 - ➡ Failure Tests
@@ -115,6 +130,6 @@ audit, outbox, Kafka, or Week 4 table exists.
 
 ## Next Recommended Task
 
-**Redis Re-warming:** define and implement safe repopulation after a successful
-PostgreSQL fallback. Do not add pre-warm, REST, Kafka, Reservation, or retry logic
-without separate approval.
+**Pre-warm Use Case:** approve the sale timing/trigger input, then integrate the
+existing `stock-prewarm.lua`. Do not add REST, Kafka, Reservation, release,
+reconciliation, or retry logic without separate approval.
