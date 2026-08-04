@@ -1,10 +1,14 @@
 package com.flashsale.inventory.infra.persistence;
 
+import com.flashsale.inventory.application.port.DurableStockUnavailableException;
 import com.flashsale.inventory.domain.aggregate.Product;
 import com.flashsale.inventory.domain.vo.ProductId;
+import jakarta.persistence.PersistenceException;
 import java.util.Objects;
 import java.util.Optional;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -32,8 +36,15 @@ public class ProductRepository
     @Override
     public Optional<Product> findById(ProductId productId) {
         Objects.requireNonNull(productId, "productId must not be null");
-        return springDataRepository.findById(productId.value())
-                .map(mapper::toDomain);
+        try {
+            return springDataRepository.findById(productId.value())
+                    .map(mapper::toDomain);
+        } catch (DataAccessException | TransactionException | PersistenceException exception) {
+            throw new DurableStockUnavailableException(
+                    "Product validation read failed",
+                    exception
+            );
+        }
     }
 
     /**

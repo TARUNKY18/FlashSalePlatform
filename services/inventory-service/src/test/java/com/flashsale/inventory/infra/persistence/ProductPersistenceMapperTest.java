@@ -71,6 +71,23 @@ class ProductPersistenceMapperTest {
         assertThrows(IllegalArgumentException.class, () -> mapper.toDomain(productEntity));
     }
 
+    @Test
+    void appliesCurrentStockAndReturnsTheManagedStockLevel() {
+        ProductJpaEntity productEntity = jpaProduct(12);
+        Product domain = mapper.toDomain(productEntity);
+        domain.decrementStock(SaleId.of(SALE_UUID), 5);
+
+        StockLevelJpaEntity managedStockLevel = mapper.applyCurrentStock(
+                domain,
+                productEntity,
+                SaleId.of(SALE_UUID)
+        );
+
+        assertSame(productEntity.getStockLevels().getFirst(), managedStockLevel);
+        assertEquals(7, managedStockLevel.getCurrentStock());
+        assertEquals(3L, managedStockLevel.getVersion());
+    }
+
     private Product domainProduct() {
         ProductId productId = ProductId.of(PRODUCT_UUID);
         StockLevel stockLevel = StockLevel.reconstitute(

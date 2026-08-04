@@ -4,16 +4,11 @@ import com.flashsale.inventory.domain.vo.StockCount;
 import java.util.Objects;
 
 /**
- * Application-level outcome of one stock-decrement attempt.
- *
- * <p>The cache-miss variant remains part of the established result vocabulary, while
- * StockCounterService now resolves cache misses through the durable fallback before
- * returning to its caller.
+ * Application-level outcome of one fully resolved stock-decrement attempt.
  */
 public sealed interface StockDecrementResult
         permits StockDecrementResult.Decremented,
-                StockDecrementResult.SoldOut,
-                StockDecrementResult.CacheMiss {
+                StockDecrementResult.SoldOut {
 
     record Decremented(StockCount remainingStock) implements StockDecrementResult {
 
@@ -23,8 +18,5 @@ public sealed interface StockDecrementResult
     }
 
     record SoldOut() implements StockDecrementResult {
-    }
-
-    record CacheMiss() implements StockDecrementResult {
     }
 }

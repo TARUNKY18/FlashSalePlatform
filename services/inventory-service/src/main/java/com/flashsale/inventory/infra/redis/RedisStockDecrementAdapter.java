@@ -3,7 +3,8 @@ package com.flashsale.inventory.infra.redis;
 import com.flashsale.inventory.application.port.StockDecrementPort;
 import com.flashsale.inventory.application.port.StockDecrementUnavailableException;
 import com.flashsale.inventory.domain.vo.SaleId;
-import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.stereotype.Component;
 
 /**
@@ -26,9 +27,9 @@ public class RedisStockDecrementAdapter implements StockDecrementPort {
     public Long decrement(SaleId saleId, int quantity) {
         try {
             return luaExecutor.execute(saleId, quantity);
-        } catch (RedisConnectionFailureException exception) {
+        } catch (DataAccessResourceFailureException | QueryTimeoutException exception) {
             throw new StockDecrementUnavailableException(
-                    "Primary stock counter is unavailable",
+                    "Primary stock counter outcome is indeterminate",
                     exception
             );
         }

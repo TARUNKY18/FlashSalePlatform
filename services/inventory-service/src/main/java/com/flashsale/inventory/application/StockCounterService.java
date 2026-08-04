@@ -1,11 +1,11 @@
 package com.flashsale.inventory.application;
 
 import com.flashsale.inventory.application.port.ProductRepository;
+import com.flashsale.inventory.application.port.DurableStockDecrementPort;
+import com.flashsale.inventory.application.port.StockProjectionSyncPort;
+import com.flashsale.inventory.application.port.StockProjectionSyncUnavailableException;
 import com.flashsale.inventory.application.port.StockDecrementPort;
 import com.flashsale.inventory.application.port.StockDecrementUnavailableException;
-import com.flashsale.inventory.application.port.StockFallbackPort;
-import com.flashsale.inventory.application.port.StockRewarmPort;
-import com.flashsale.inventory.application.port.StockRewarmUnavailableException;
 import com.flashsale.inventory.domain.aggregate.Product;
 import com.flashsale.inventory.domain.entity.StockLevel;
 import com.flashsale.inventory.domain.vo.ProductId;
@@ -13,38 +13,40 @@ import com.flashsale.inventory.domain.vo.SaleId;
 import com.flashsale.inventory.domain.vo.StockCount;
 import java.util.NoSuchElementException;
 import java.util.Objects;
-import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
  * Orchestrates one stock-decrement attempt through application ports.
  *
- * <p>The Product aggregate remains the authority for allocation ownership and quantity
- * bounds. A cache miss or unavailable primary counter delegates once to the durable
- * fallback. A successful fallback is used to safely restore a missing primary counter.
- * This service does not retry or pre-warm Redis.
+ * <p>The Product aggregate validates allocation ownership and quantity bounds. Redis is
+ * attempted once as an atomic projection, while PostgreSQL is invoked once for every
+ * recognized or indeterminate Redis outcome and exclusively determines the returned result.
  */
 @Service
 public class StockCounterService {
 
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(StockCounterService.class);
     private static final long CACHE_MISS = -2L;
     private static final long SOLD_OUT = -1L;
 
     private final ProductRepository productRepository;
     private final StockDecrementPort stockDecrementPort;
-    private final StockFallbackPort stockFallbackPort;
-    private final StockRewarmPort stockRewarmPort;
+    private final DurableStockDecrementPort durableStockDecrementPort;
+    private final StockProjectionSyncPort stockProjectionSyncPort;
 
     public StockCounterService(
             ProductRepository productRepository,
             StockDecrementPort stockDecrementPort,
-            StockFallbackPort stockFallbackPort,
-            StockRewarmPort stockRewarmPort
+            DurableStockDecrementPort durableStockDecrementPort,
+            StockProjectionSyncPort stockProjectionSyncPort
     ) {
         this.productRepository = productRepository;
         this.stockDecrementPort = stockDecrementPort;
-        this.stockFallbackPort = stockFallbackPort;
-        this.stockRewarmPort = stockRewarmPort;
+        this.durableStockDecrementPort = durableStockDecrementPort;
+        this.stockProjectionSyncPort = stockProjectionSyncPort;
     }
 
     public StockDecrementResult decrement(
@@ -71,63 +73,139 @@ public class StockCounterService {
             );
         }
 
-        Long rawResult;
+        Long redisResult = null;
         try {
-            rawResult = stockDecrementPort.decrement(saleId, quantity);
+            redisResult = stockDecrementPort.decrement(saleId, quantity);
+            validateRedisResult(redisResult);
         } catch (StockDecrementUnavailableException exception) {
-            return fallback(productId, saleId, quantity);
+            LOGGER.warn(
+                    "Redis decrement outcome is indeterminate for product {} and sale {}; "
+                            + "continuing to authoritative PostgreSQL",
+                    productId,
+                    saleId,
+                    exception
+            );
         }
+
+        DurableStockDecrementResult durableResult =
+                durableStockDecrementPort.decrement(productId, saleId, quantity);
+        if (durableResult == null) {
+            throw new IllegalStateException("Durable stock decrement port returned null");
+        }
+
+        warnIfProjectionDisagrees(productId, saleId, redisResult, durableResult);
+
+        StockCount durableStock;
+        long durableRevision;
+        StockDecrementResult result;
+        if (durableResult instanceof DurableStockDecrementResult.Decremented decremented) {
+            durableStock = decremented.remainingStock();
+            durableRevision = decremented.revision();
+            result = new StockDecrementResult.Decremented(durableStock);
+        } else if (durableResult
+                instanceof DurableStockDecrementResult.Insufficient insufficient) {
+            durableStock = insufficient.currentStock();
+            durableRevision = insufficient.revision();
+            result = new StockDecrementResult.SoldOut();
+        } else {
+            throw new IllegalStateException(
+                    "Unexpected durable stock decrement result: " + durableResult
+            );
+        }
+
+        synchronizeProjection(saleId, durableStock, durableRevision);
+        return result;
+    }
+
+    private void validateRedisResult(Long rawResult) {
         if (rawResult == null) {
             throw new IllegalStateException("Stock decrement port returned null");
         }
-        if (rawResult == CACHE_MISS) {
-            return fallback(productId, saleId, quantity);
-        }
-        if (rawResult == SOLD_OUT) {
-            return new StockDecrementResult.SoldOut();
-        }
-        if (rawResult < 0) {
+        if (rawResult < CACHE_MISS) {
             throw new IllegalStateException(
                     "Unexpected stock decrement result: " + rawResult
             );
         }
-
-        try {
-            return new StockDecrementResult.Decremented(
-                    StockCount.of(Math.toIntExact(rawResult))
-            );
-        } catch (ArithmeticException exception) {
+        if (rawResult > Integer.MAX_VALUE) {
             throw new IllegalStateException(
-                    "Stock decrement result exceeds supported range: " + rawResult,
-                    exception
+                    "Stock decrement result exceeds supported range: " + rawResult
             );
         }
     }
 
-    private StockDecrementResult fallback(
+    private void warnIfProjectionDisagrees(
             ProductId productId,
             SaleId saleId,
-            int quantity
+            Long redisResult,
+            DurableStockDecrementResult durableResult
     ) {
-        Optional<StockCount> remainingStock = stockFallbackPort.decrement(
-                productId,
-                saleId,
-                quantity
-        );
-        if (remainingStock == null) {
-            throw new IllegalStateException("Stock fallback port returned null");
-        }
-        if (remainingStock.isEmpty()) {
-            return new StockDecrementResult.SoldOut();
+        if (redisResult == null || redisResult == CACHE_MISS) {
+            return;
         }
 
-        StockCount durableRemainingStock = remainingStock.orElseThrow();
-        try {
-            stockRewarmPort.rewarmIfAbsent(saleId, durableRemainingStock);
-        } catch (StockRewarmUnavailableException exception) {
-            // The authoritative PostgreSQL decrement has already succeeded. Re-warming is
-            // best-effort and cannot turn that committed decrement into a failed result.
+        if (durableResult instanceof DurableStockDecrementResult.Decremented decremented) {
+            if (redisResult == SOLD_OUT) {
+                LOGGER.warn(
+                        "Redis projected sold-out but PostgreSQL committed a decrement "
+                                + "for product {} and sale {}; durable remaining stock is {}",
+                        productId,
+                        saleId,
+                        decremented.remainingStock().value()
+                );
+            } else if (redisResult >= 0
+                    && redisResult.longValue() != decremented.remainingStock().value()) {
+                LOGGER.warn(
+                        "Redis and PostgreSQL remaining stock disagree for product {} "
+                                + "and sale {}: Redis={}, PostgreSQL={}",
+                        productId,
+                        saleId,
+                        redisResult,
+                        decremented.remainingStock().value()
+                );
+            }
+            return;
         }
-        return new StockDecrementResult.Decremented(durableRemainingStock);
+
+        if (redisResult >= 0
+                && durableResult instanceof DurableStockDecrementResult.Insufficient
+                        insufficient) {
+            LOGGER.warn(
+                    "Redis projected a decrement but PostgreSQL found insufficient stock "
+                            + "for product {} and sale {}; Redis remaining={}, "
+                            + "PostgreSQL current={}",
+                    productId,
+                    saleId,
+                    redisResult,
+                    insufficient.currentStock().value()
+            );
+        }
+    }
+
+    private void synchronizeProjection(
+            SaleId saleId,
+            StockCount durableStock,
+            long durableRevision
+    ) {
+        try {
+            StockProjectionSyncResult syncResult = stockProjectionSyncPort.synchronize(
+                    saleId,
+                    durableStock,
+                    durableRevision
+            );
+            if (syncResult == null) {
+                LOGGER.warn(
+                        "Redis projection synchronization returned no result for sale {}; "
+                                + "preserving committed PostgreSQL outcome",
+                        saleId
+                );
+            }
+        } catch (StockProjectionSyncUnavailableException exception) {
+            LOGGER.warn(
+                    "Redis projection synchronization failed for sale {}; preserving "
+                            + "committed PostgreSQL outcome",
+                    saleId,
+                    exception
+            );
+        }
     }
 }

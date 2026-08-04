@@ -52,7 +52,7 @@ public class ProductPersistenceMapper {
      * <p>JPA remains responsible for advancing the persisted optimistic version when the
      * surrounding transaction flushes.
      */
-    public void applyCurrentStock(
+    public StockLevelJpaEntity applyCurrentStock(
             Product product,
             ProductJpaEntity productEntity,
             SaleId saleId
@@ -86,6 +86,7 @@ public class ProductPersistenceMapper {
                                 + saleId
                 ));
         jpaStockLevel.updateCurrentStock(domainStockLevel.currentStock().value());
+        return jpaStockLevel;
     }
 
     private StockLevelJpaEntity toJpaEntity(StockLevel stockLevel) {

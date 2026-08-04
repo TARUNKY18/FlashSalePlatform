@@ -1,18 +1,26 @@
 package com.flashsale.inventory.infra.persistence;
 
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.flashsale.inventory.application.port.DurableStockUnavailableException;
 import com.flashsale.inventory.domain.aggregate.Product;
 import com.flashsale.inventory.domain.vo.ProductId;
 import com.flashsale.inventory.domain.vo.StockCount;
+import jakarta.persistence.PersistenceException;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.transaction.TransactionSystemException;
 
 class ProductRepositoryTest {
 
@@ -50,6 +58,20 @@ class ProductRepositoryTest {
         verifyNoInteractions(mapper);
     }
 
+    @ParameterizedTest
+    @MethodSource("infrastructureFailures")
+    void translatesProductValidationReadInfrastructureFailure(RuntimeException failure) {
+        when(springDataRepository.findById(PRODUCT_UUID)).thenThrow(failure);
+
+        DurableStockUnavailableException exception = assertThrows(
+                DurableStockUnavailableException.class,
+                () -> repository.findById(PRODUCT_ID)
+        );
+
+        assertSame(failure, exception.getCause());
+        verifyNoInteractions(mapper);
+    }
+
     @Test
     void mapsSavesFlushesAndReturnsPersistedAggregate() {
         Product aggregate = Product.create(PRODUCT_ID, StockCount.of(100));
@@ -71,5 +93,13 @@ class ProductRepositoryTest {
         verify(mapper).toJpaEntity(aggregate);
         verify(springDataRepository).saveAndFlush(entity);
         verify(mapper).toDomain(savedEntity);
+    }
+
+    private static Stream<RuntimeException> infrastructureFailures() {
+        return Stream.of(
+                new DataAccessResourceFailureException("database unavailable"),
+                new TransactionSystemException("transaction unavailable"),
+                new PersistenceException("persistence unavailable")
+        );
     }
 }

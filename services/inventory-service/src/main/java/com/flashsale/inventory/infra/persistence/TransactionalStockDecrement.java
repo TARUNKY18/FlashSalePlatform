@@ -1,30 +1,27 @@
 package com.flashsale.inventory.infra.persistence;
 
-import com.flashsale.inventory.application.port.StockFallbackPort;
+import com.flashsale.inventory.application.DurableStockDecrementResult;
 import com.flashsale.inventory.domain.aggregate.Product;
+import com.flashsale.inventory.domain.entity.StockLevel;
 import com.flashsale.inventory.domain.vo.ProductId;
 import com.flashsale.inventory.domain.vo.SaleId;
 import com.flashsale.inventory.domain.vo.StockCount;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
-import org.springframework.stereotype.Repository;
+import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * PostgreSQL implementation of the durable fallback decrement.
- *
- * <p>The Product row is pessimistically locked for the full read, domain mutation, managed
- * StockLevel update, and flush transaction. Locking the aggregate root serializes all
- * fallback decrements for its owned StockLevels without exposing a child repository.
+ * Owns the complete authoritative PostgreSQL decrement transaction.
  */
-@Repository
-public class PostgresStockFallbackAdapter implements StockFallbackPort {
+@Component
+public class TransactionalStockDecrement {
 
     private final SpringDataProductRepository springDataRepository;
     private final ProductPersistenceMapper mapper;
 
-    public PostgresStockFallbackAdapter(
+    public TransactionalStockDecrement(
             SpringDataProductRepository springDataRepository,
             ProductPersistenceMapper mapper
     ) {
@@ -33,8 +30,7 @@ public class PostgresStockFallbackAdapter implements StockFallbackPort {
     }
 
     @Transactional
-    @Override
-    public Optional<StockCount> decrement(
+    public DurableStockDecrementResult decrement(
             ProductId productId,
             SaleId saleId,
             int quantity
@@ -48,13 +44,26 @@ public class PostgresStockFallbackAdapter implements StockFallbackPort {
                         "Product not found: " + productId
                 ));
         Product product = mapper.toDomain(lockedProduct);
+        StockLevel lockedStockLevel = product.stockLevelFor(saleId)
+                .orElseThrow(() -> new NoSuchElementException(
+                        "Product " + productId
+                                + " has no StockLevel for sale " + saleId
+                ));
+
         Optional<StockCount> remainingStock = product.decrementStock(saleId, quantity);
         if (remainingStock.isEmpty()) {
-            return Optional.empty();
+            return new DurableStockDecrementResult.Insufficient(
+                    lockedStockLevel.currentStock(),
+                    lockedStockLevel.version()
+            );
         }
 
-        mapper.applyCurrentStock(product, lockedProduct, saleId);
+        StockLevelJpaEntity managedStockLevel =
+                mapper.applyCurrentStock(product, lockedProduct, saleId);
         springDataRepository.flush();
-        return remainingStock;
+        return new DurableStockDecrementResult.Decremented(
+                StockCount.of(managedStockLevel.getCurrentStock()),
+                managedStockLevel.getVersion()
+        );
     }
 }

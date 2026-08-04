@@ -18,4 +18,12 @@ public class RedisScriptConfiguration {
         script.setResultType(Long.class);
         return script;
     }
+
+    @Bean
+    public DefaultRedisScript<Long> stockProjectionSyncScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("lua/stock-projection-sync.lua"));
+        script.setResultType(Long.class);
+        return script;
+    }
 }

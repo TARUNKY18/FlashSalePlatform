@@ -32,4 +32,23 @@ class RedisScriptConfigurationTest {
             assertSame(firstSha, first.getSha1(), "DefaultRedisScript must cache its SHA");
         }
     }
+
+    @Test
+    void loadsProjectionSyncScriptAsSingletonWithLongResult() {
+        try (AnnotationConfigApplicationContext context =
+                     new AnnotationConfigApplicationContext(RedisScriptConfiguration.class)) {
+            RedisScript<?> first =
+                    context.getBean("stockProjectionSyncScript", RedisScript.class);
+            RedisScript<?> second =
+                    context.getBean("stockProjectionSyncScript", RedisScript.class);
+
+            String scriptText = first.getScriptAsString();
+
+            assertTrue(scriptText.contains("redis.call('SET', KEYS[1], ARGV[1], 'KEEPTTL')"));
+            assertTrue(scriptText.contains("redis.call('PEXPIREAT', KEYS[2], absolute_expiration)"));
+            assertTrue(scriptText.contains("redis.call('DEL', KEYS[1], KEYS[2])"));
+            assertEquals(Long.class, first.getResultType());
+            assertSame(first, second);
+        }
+    }
 }
