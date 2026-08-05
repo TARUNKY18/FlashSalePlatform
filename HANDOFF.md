@@ -1,6 +1,6 @@
 # Flash Sale Platform — Engineering Handoff
 
-**Handoff date:** 2026-07-25
+**Handoff date:** 2026-08-04
 
 **Current milestone:** Week 3 — InventoryService
 
@@ -8,19 +8,21 @@
 
 **Branch:** `main`
 
-**Implementation HEAD:** `10069d8` (`feat(inventory): add Redis re-warming after PostgreSQL fallback`)
+**Implementation HEAD:** `bca1ff1` (`Week 3 implementation`)
 
 **Audience:** The senior engineer or Codex session continuing Week 3 development
 
 This is the entry document for the next development session. It records the
-approved repository state through the Redis re-warming slice. Do not infer that
-Week 3 is complete: pre-warming, live/concurrent correctness tests, and the
-remaining regression suites have not been implemented.
+approved repository state through the durable-authority correctness gate. The
+Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
+implementation was superseded at `bca1ff1` by revision-fenced synchronization.
+Week 3 remains incomplete because pre-warm, property-based testing, and final
+documentation reconciliation remain unfinished.
 
 > **Documentation drift warning:** `context/PROJECT_TRUTH.md` and
 > `context/REPOSITORY_INDEX.md` still contain stale implementation status.
 > Until they are reconciled, current source code, this handoff,
-> `context/CURRENT_STATE.md`, and `SESSION-003` through `SESSION-005` in
+> `context/CURRENT_STATE.md`, and `SESSION-003` through `SESSION-006` in
 > `context/SESSION_LOG.md` are the verified implementation evidence. Do not copy
 > stale planned fields or structures into code.
 
@@ -76,29 +78,28 @@ StockCounterService
   -> StockDecrementPort
   -> RedisStockDecrementAdapter
   -> StockDecrementLuaExecutor
-  -> stock-decrement.lua
-
-On -2 cache miss or translated Redis connection failure:
-StockCounterService
-  -> StockFallbackPort
-  -> PostgresStockFallbackAdapter (@Transactional)
+  -> one stock-decrement.lua attempt
+  -> DurableStockDecrementPort
+  -> PostgresStockDecrementAdapter
+  -> TransactionalStockDecrement (@Transactional)
   -> SpringDataProductRepository.findByIdForUpdate (PESSIMISTIC_WRITE)
   -> Product.decrementStock
   -> ProductPersistenceMapper.applyCurrentStock
-  -> managed StockLevel flush
-
-After successful fallback only:
-StockCounterService
-  -> StockRewarmPort
-  -> RedisStockRewarmAdapter
-  -> SETNX stock:{saleId} = durable remaining stock
+  -> managed StockLevel flush and revision retrieval
+  -> PostgreSQL commit
+  -> StockProjectionSyncPort
+  -> RedisStockProjectionSyncAdapter
+  -> StockProjectionSyncLuaExecutor
+  -> stock-projection-sync.lua
+  -> PostgreSQL-derived Decremented/SoldOut
 ```
 
-Redis success and sold-out outcomes do not touch PostgreSQL. A Redis cache miss
-or translated connection failure invokes the fallback port once. A successful
-fallback invokes best-effort Redis re-warming once; sold-out fallback does not.
-Atomic set-if-absent never overwrites a counter restored or decremented by
-another request.
+Every recognized Redis result and every indeterminate transport failure invokes
+PostgreSQL exactly once. PostgreSQL is authoritative and exclusively determines
+the returned result. Post-commit synchronization applies equal/newer StockLevel
+revisions, ignores strictly older revisions, invalidates revisionless stock,
+preserves stock TTL, and never recreates a missing stock key. Synchronization
+failure warns but never conceals the committed result.
 
 ## Tech stack
 
@@ -115,6 +116,7 @@ another request.
 | Cache/counter store | Redis Cluster through Spring Data Redis |
 | Concurrency model | Java 21 virtual threads enabled |
 | Unit testing | JUnit Jupiter, AssertJ/JUnit assertions, Mockito |
+| Integration testing | Testcontainers with real PostgreSQL 16 and Redis 7.2 |
 | Packaging | Spring Boot executable JAR |
 
 ## Java version
@@ -150,12 +152,12 @@ documents in this order:
    its implementation-status sections are stale and must not override current
    source evidence.
 3. `context/CURRENT_STATE.md` — current operational/milestone snapshot through
-   the Redis re-warming slice.
+   the durable-authority correctness gate.
 4. `docs/architecture/Build-Plan.md` — milestone intent and sequencing; treat
    unapproved legacy details as plans, not implementation requirements.
-5. `context/SESSION_LOG.md` — read `SESSION-003` through `SESSION-005` for the
-   exhaustive implementation, fallback, re-warming, verification, and decision
-   records.
+5. `context/SESSION_LOG.md` — read `SESSION-003` through `SESSION-006` for the
+   exhaustive implementation, historical fallback/re-warming, durable-authority
+   verification, and decision records.
 6. `context/CONFLICTS.md` — check unresolved documentation conflicts before
    acting on contradictory specifications.
 7. `context/REPOSITORY_INDEX.md` — repository structure reference; verify it
@@ -188,13 +190,15 @@ these approved implementation commits:
 | `2a22457` | ProductRepository application port and StockCounterService |
 | `9bb3ad7` | Product-owned, transactionally locked PostgreSQL fallback |
 | `10069d8` | Safe Redis re-warming after successful PostgreSQL fallback |
+| `bca1ff1` | PostgreSQL durable authority, revision-fenced Redis projection, and real infrastructure correctness tests |
 
 InventoryService currently contains:
 
-- 25 production Java types.
-- 12 test classes.
-- 71 passing unit tests.
-- One integrated Lua script: `stock-decrement.lua`.
+- 30 production Java files.
+- 17 runnable test classes.
+- 126 passing Inventory tests: 105 unit and 21 real Testcontainers tests.
+- Two integrated Lua scripts: `stock-decrement.lua` and
+  `stock-projection-sync.lua`.
 - Two Flyway-managed tables: `products` and `stock_levels`.
 - No REST endpoints, Kafka code, pre-warm use case, Reservation work, release
   integration, or reconciliation integration.
@@ -252,8 +256,8 @@ Enforced rules:
 - Current stock is between zero and total allocation, inclusive.
 - Product and StockLevel versions cannot be negative.
 - Failed allocation is atomic and does not increment Product version.
-- Insufficient fallback stock does not mutate the StockLevel.
-- A successful fallback decrement replaces the immutable owned StockLevel,
+- Insufficient durable stock does not mutate the StockLevel.
+- A successful durable decrement replaces the immutable owned StockLevel,
   reduces current stock exactly once, and advances its domain version.
 
 The domain imports no Spring, JPA, Hibernate, Redis, or Kafka types.
@@ -317,33 +321,19 @@ exists.
 
 ## ✔ Redis Lua Integration
 
-The existing approved resource
-`src/main/resources/lua/stock-decrement.lua` is loaded without copying script
-logic into Java.
+`RedisScriptConfiguration` loads two typed singleton scripts:
 
-Script contract:
+- `stock-decrement.lua` performs the one allowed Redis decrement attempt and
+  retains the `-2` cache-miss, `-1` sold-out, and non-negative remaining-stock
+  return contract.
+- `stock-projection-sync.lua` synchronizes PostgreSQL-derived stock and
+  StockLevel revision after commit. It applies equal/newer revisions, ignores
+  older revisions, invalidates revisionless stock, preserves stock TTL, and
+  does not recreate a missing stock key.
 
-- `KEYS[1] = stock:{saleId}`.
-- `ARGV[1] = quantity`.
-- Return `-2` for cache miss.
-- Return `-1` for sold out or insufficient stock.
-- Return a non-negative remaining stock count on success.
-- Check and `DECRBY` execute atomically on the Redis server.
-
-`RedisScriptConfiguration` creates a singleton
-`DefaultRedisScript<Long>` from the classpath resource. The approved script
-SHA-1 is:
-
-```text
-2dab8322003da880c4aa8a4f55ca9aefaadc0215
-```
-
-`StockDecrementLuaExecutor` owns Redis key construction, argument
-serialization, `StringRedisTemplate.execute`, and raw nullable result
-propagation. It does not interpret business outcomes.
-
-No live Redis execution has been performed yet; loading, SHA stability, key
-formatting, arguments, and template wiring are unit-tested.
+`StockDecrementLuaExecutor` and `StockProjectionSyncLuaExecutor` exclusively
+own key construction, serialization, and Redis script execution mechanics.
+Both scripts are exercised against Redis 7.2 by Testcontainers tests.
 
 ## ✔ Redis Adapter
 
@@ -356,11 +346,10 @@ decrement(SaleId, int) -> Long
 It exposes no Redis, Lua, Spring, key, or serialization type.
 
 `RedisStockDecrementAdapter` implements the port by delegating exactly once to
-`StockDecrementLuaExecutor`. It preserves `-2`, `-1`, non-negative values, and
-`null` without business interpretation. It translates only
-`RedisConnectionFailureException` into the application-owned
-`StockDecrementUnavailableException`; all result interpretation remains in the
-application service.
+`StockDecrementLuaExecutor`. It preserves deterministic Lua results and marks
+only connection, timeout, and transport failures as indeterminate through the
+application-owned `StockDecrementUnavailableException`. Deterministic Redis
+failures fail closed.
 
 ## ✔ StockCounterService
 
@@ -368,95 +357,42 @@ application service.
 
 Current behavior:
 
-1. Reject null ProductId or SaleId.
-2. Load Product through the application `ProductRepository` port.
-3. Resolve the sale allocation through `Product.stockLevelFor`; never query a
-   StockLevel independently.
-4. Validate that quantity is positive and no greater than the StockLevel's
-   total allocation by using `StockCount.canDecrement`.
-5. Invoke `StockDecrementPort` exactly once.
-6. On `-2` cache miss or `StockDecrementUnavailableException`, invoke
-   `StockFallbackPort` exactly once.
-7. On a present fallback result, invoke `StockRewarmPort` exactly once with the
-   durable remaining StockCount.
-8. Preserve the durable success when re-warming is unavailable.
-9. Map an empty fallback result or Redis `-1` to
-   `StockDecrementResult.SoldOut`.
-10. Map a non-negative Redis result or present fallback result to
-   `StockDecrementResult.Decremented(StockCount)`.
-11. Reject `null`, unknown negative values, and values outside Java `int`
-   range as illegal infrastructure results.
+1. Validate Product ownership and the requested quantity through the
+   framework-free Product aggregate.
+2. Attempt `StockDecrementPort` exactly once.
+3. For every recognized Lua result, or an indeterminate Redis transport
+   failure, invoke `DurableStockDecrementPort` exactly once.
+4. Return only the PostgreSQL-derived `Decremented` or `SoldOut` result.
+5. After the durable transaction commits, invoke `StockProjectionSyncPort`
+   with the authoritative remaining stock and child revision.
+6. Preserve the committed result if projection synchronization is unavailable
+   or returns no result.
 
-Current error behavior:
+There is no retry, compensation, REST contract, or Redis-only success path.
 
-- Missing Product or StockLevel: `NoSuchElementException`.
-- Invalid quantity: `IllegalArgumentException`.
-- Invalid port output: `IllegalStateException`.
-- Sold out and success remain explicit sealed application outcomes; cache miss
-  is resolved internally through the fallback.
+## ✔ PostgreSQL Durable Authority
 
-The service does not retry or pre-warm Redis. Redis success and sold-out paths
-do not re-warm. A successful Redis decrement still performs no PostgreSQL
-write. There is no stable external/API error contract.
+`DurableStockDecrementPort` is the infrastructure-neutral boundary for one
+authoritative decrement. `PostgresStockDecrementAdapter` delegates to
+`TransactionalStockDecrement`, whose proxied `@Transactional` method locks the
+Product aggregate root with `PESSIMISTIC_WRITE`, applies the Product-owned
+decrement, flushes the managed StockLevel, and returns the remaining stock plus
+post-flush revision. The port does not return until the transaction commits.
 
-## ✔ PostgreSQL Fallback
-
-`StockFallbackPort` is the infrastructure-neutral application boundary for one
-durable decrement:
-
-```text
-decrement(ProductId, SaleId, int) -> Optional<StockCount>
-```
-
-An empty result means the locked durable StockLevel has insufficient stock. A
-present result contains the durable stock remaining after one successful
-decrement.
-
-`PostgresStockFallbackAdapter` implements the port in one `@Transactional`
-operation:
-
-1. Lock the Product aggregate root through
-   `SpringDataProductRepository.findByIdForUpdate` with
-   `PESSIMISTIC_WRITE`.
-2. Map the complete managed Product/StockLevel tree to the domain.
-3. Invoke `Product.decrementStock`.
-4. Return sold out without mutation or flush when durable stock is
-   insufficient.
-5. Apply successful current-stock state through
-   `ProductPersistenceMapper.applyCurrentStock`.
-6. Flush the managed owned StockLevel before returning the remaining stock.
-
-There is no independent StockLevel repository or schema change. The fallback
-adapter remains Redis-free; application orchestration invokes re-warming only
-after the transactional adapter returns successful durable remaining stock.
+PostgreSQL exclusively decides success or sold out. The Redis attempt is only
+a projection-side operation and never determines the client-visible result.
 
 ## ✔ Redis Re-warming
 
-`StockRewarmPort` is the infrastructure-neutral application boundary:
+The no-overwrite `SETNX` re-warming slice was completed in `10069d8`. Revision
+2 then superseded that request-time bridge in `bca1ff1`: `StockRewarmPort`,
+`RedisStockRewarmAdapter`, and their unavailable exception were removed.
 
-```text
-rewarmIfAbsent(SaleId, StockCount) -> void
-```
-
-`RedisStockRewarmAdapter` implements the port through
-`StringRedisTemplate.opsForValue().setIfAbsent`:
-
-- Key: `stock:{saleId}`.
-- Value: the successful fallback's durable remaining StockCount.
-- A missing counter is restored atomically.
-- An existing counter is never overwritten.
-- Redis connection failure is translated to the application-owned
-  `StockRewarmUnavailableException`.
-
-`StockCounterService` invokes the port once only after successful fallback.
-Fallback sold out, Redis success, Redis sold out, invalid input, and invalid
-infrastructure results never invoke re-warming. Re-warm unavailability is
-best-effort: the already-committed PostgreSQL decrement is still returned as
-`Decremented`.
-
-No Lua script, TTL, pre-warm marker, retry, domain mutation, persistence change,
-schema change, REST, Kafka, Reservation, release, or reconciliation behavior
-was added.
+Their replacement is revision-fenced post-commit projection synchronization:
+`StockProjectionSyncPort` and `RedisStockProjectionSyncAdapter` update
+`stock:{saleId}` together with `stock:version:{saleId}` only when the durable
+revision is not older. Missing stock is intentionally left missing for the
+separate pre-warm use case.
 
 ---
 
@@ -487,13 +423,15 @@ Tests mirror these production boundaries:
 - `com.flashsale.inventory.infra.config`
 - `com.flashsale.inventory.infra.persistence`
 - `com.flashsale.inventory.infra.redis`
+- `com.flashsale.inventory.integration`
 
 ## Resource paths
 
 - `services/inventory-service/src/main/resources/db/migration` — Inventory
   Flyway migrations.
 - `services/inventory-service/src/main/resources/lua` — approved Redis Lua
-  resources. Only `stock-decrement.lua` is integrated.
+  resources. `stock-decrement.lua` and `stock-projection-sync.lua` are
+  integrated.
 
 ---
 
@@ -592,39 +530,44 @@ ports introduced during this session.
 ### `StockDecrementUnavailableException`
 
 - **Package:** `com.flashsale.inventory.application.port`
-- **Responsibility:** Infrastructure-neutral signal that the primary stock
-  counter cannot be reached.
+- **Responsibility:** Infrastructure-neutral signal that the Redis attempt has
+  an indeterminate transport outcome.
 - **Dependencies:** Java `RuntimeException` only.
-- **Why it exists:** Lets application orchestration select the approved durable
-  fallback without importing Redis exception types.
+- **Why it exists:** Lets application orchestration continue to durable
+  authority without importing Redis exception types.
 
-### `StockFallbackPort`
-
-- **Package:** `com.flashsale.inventory.application.port`
-- **Responsibility:** Defines one authoritative durable decrement using
-  ProductId, SaleId, quantity, and an optional remaining StockCount.
-- **Dependencies:** Domain typed IDs, `StockCount`, and Java `Optional`.
-- **Why it exists:** Keeps PostgreSQL and transaction mechanics behind an
-  application-owned boundary.
-
-### `StockRewarmPort`
+### `DurableStockDecrementPort`
 
 - **Package:** `com.flashsale.inventory.application.port`
-- **Responsibility:** Restores a missing primary counter from durable remaining
-  stock without replacing an existing counter.
-- **Dependencies:** Domain `SaleId` and `StockCount` only.
-- **Why it exists:** Keeps Redis restoration mechanics behind an
-  application-owned boundary and makes no-overwrite behavior part of the port
-  contract.
+- **Responsibility:** Defines exactly one authoritative PostgreSQL decrement
+  using ProductId, SaleId, and quantity.
+- **Dependencies:** Domain typed IDs and application
+  `DurableStockDecrementResult`.
+- **Why it exists:** Keeps locking, transaction, JPA, and flush mechanics behind
+  an application-owned boundary.
 
-### `StockRewarmUnavailableException`
+### `DurableStockUnavailableException`
 
 - **Package:** `com.flashsale.inventory.application.port`
-- **Responsibility:** Infrastructure-neutral signal that Redis could not be
-  re-warmed after durable fallback success.
+- **Responsibility:** Infrastructure-neutral signal that durable authority is
+  unavailable.
 - **Dependencies:** Java `RuntimeException` only.
-- **Why it exists:** Lets the application preserve committed durable success
-  without importing Redis exception types.
+
+### `StockProjectionSyncPort`
+
+- **Package:** `com.flashsale.inventory.application.port`
+- **Responsibility:** Synchronizes authoritative stock and revision into the
+  Redis projection after commit.
+- **Dependencies:** Domain `SaleId` and application projection result types.
+- **Why it exists:** Keeps Redis revision-fencing mechanics outside application
+  orchestration.
+
+### `StockProjectionSyncUnavailableException`
+
+- **Package:** `com.flashsale.inventory.application.port`
+- **Responsibility:** Infrastructure-neutral signal that post-commit projection
+  synchronization was unavailable.
+- **Dependencies:** Java `RuntimeException` only.
 
 ### `StockCounterService`
 
@@ -632,9 +575,8 @@ ports introduced during this session.
 - **Responsibility:** Orchestrates one validated decrement attempt through
   Product ownership and application ports.
 - **Dependencies:** Application `ProductRepository`, `StockDecrementPort`,
-  `StockFallbackPort`, `StockRewarmPort`,
-  `StockDecrementUnavailableException`, and
-  `StockRewarmUnavailableException`; domain `Product`, `StockLevel`,
+  `DurableStockDecrementPort`, `StockProjectionSyncPort`, and their
+  infrastructure-neutral result/failure types; domain `Product`, `StockLevel`,
   `ProductId`, `SaleId`, and `StockCount`; Spring `@Service`.
 - **Why it exists:** Result interpretation and use-case sequencing belong
   outside both the domain model and Redis adapter.
@@ -644,13 +586,23 @@ ports introduced during this session.
 - **Package:** `com.flashsale.inventory.application`
 - **Responsibility:** Sealed application outcome for decrement.
 - **Dependencies:** Domain `StockCount` and Java `Objects`.
-- **Why it exists:** Makes success, sold out, and cache miss explicit without
+- **Why it exists:** Makes authoritative success and sold out explicit without
   leaking Redis numeric codes to callers.
 - **Nested result records:**
   - `Decremented(StockCount remainingStock)` — successful decrement.
-  - `SoldOut()` — Redis reported insufficient/no stock.
-  - `CacheMiss()` — retained in the established result vocabulary; current
-    orchestration resolves cache misses before returning.
+  - `SoldOut()` — PostgreSQL reported insufficient stock.
+
+### `DurableStockDecrementResult`
+
+- **Package:** `com.flashsale.inventory.application`
+- **Responsibility:** Carries the authoritative success/sold-out decision,
+  remaining stock, and StockLevel revision across the durable port.
+
+### `StockProjectionSyncResult`
+
+- **Package:** `com.flashsale.inventory.application`
+- **Responsibility:** Represents applied, stale-ignored, and missing
+  projection-sync outcomes without exposing Redis types.
 
 ### `ProductJpaEntity`
 
@@ -677,7 +629,7 @@ ports introduced during this session.
 - **Package:** `com.flashsale.inventory.infra.persistence`
 - **Responsibility:** Maps the complete Product/StockLevel tree between domain
   and JPA representations, including ownership and versions, and applies
-  fallback current-stock state to the matching managed StockLevel.
+  authoritative current-stock state to the matching managed StockLevel.
 - **Dependencies:** All Inventory domain types, both JPA entity types, and
   Spring `@Component`.
 - **Why it exists:** Keeps all persistence translation in one explicit boundary
@@ -688,7 +640,7 @@ ports introduced during this session.
 - **Package:** `com.flashsale.inventory.infra.persistence`
 - **Responsibility:** Spring Data CRUD repository for `ProductJpaEntity` with an
   entity-graph `findById` that fetches owned StockLevels and a
-  `PESSIMISTIC_WRITE` Product-root lookup for fallback.
+  `PESSIMISTIC_WRITE` Product-root lookup for durable decrement.
 - **Dependencies:** Spring Data JPA, `ProductJpaEntity`, `UUID`, and
   `Optional`.
 - **Why it exists:** Supplies JPA mechanics while keeping Spring Data types
@@ -705,22 +657,29 @@ ports introduced during this session.
 - **Why it exists:** Connects the application-owned repository contract to JPA
   without exposing JPA entities outside infrastructure.
 
-### `PostgresStockFallbackAdapter`
+### `PostgresStockDecrementAdapter`
 
 - **Package:** `com.flashsale.inventory.infra.persistence`
-- **Responsibility:** Implements `StockFallbackPort` by locking the Product
-  aggregate root, invoking the Product-owned decrement, applying state through
-  the mapper, and flushing the managed StockLevel in one transaction.
-- **Dependencies:** Application `StockFallbackPort`, Inventory domain types,
-  Spring Data repository/mapper, and Spring transaction/repository annotations.
-- **Why it exists:** Provides the approved PostgreSQL fallback without exposing
-  a child repository or moving business rules into persistence.
+- **Responsibility:** Implements `DurableStockDecrementPort` and delegates to
+  the proxied transactional component.
+- **Dependencies:** Application durable port/result types and
+  `TransactionalStockDecrement`.
+- **Why it exists:** Returns from the port only after the authoritative
+  transaction has committed.
+
+### `TransactionalStockDecrement`
+
+- **Package:** `com.flashsale.inventory.infra.persistence`
+- **Responsibility:** Owns the `@Transactional` Product-root lock, domain
+  decrement, managed StockLevel update, flush, and revision retrieval.
+- **Why it exists:** Keeps the transaction boundary proxy-visible and prevents
+  Redis I/O from occurring inside the PostgreSQL transaction.
 
 ### `RedisScriptConfiguration`
 
 - **Package:** `com.flashsale.inventory.infra.config`
-- **Responsibility:** Loads `lua/stock-decrement.lua` as a singleton
-  `DefaultRedisScript<Long>` bean.
+- **Responsibility:** Loads `lua/stock-decrement.lua` and
+  `lua/stock-projection-sync.lua` as singleton typed script beans.
 - **Dependencies:** Spring configuration/resource APIs and Spring Data Redis
   script support.
 - **Why it exists:** Centralizes classpath script loading, result typing, and
@@ -736,28 +695,38 @@ ports introduced during this session.
 - **Why it exists:** Encapsulates Redis-specific key, serialization, and script
   execution mechanics in one thin infrastructure class.
 
+### `StockProjectionSyncLuaExecutor`
+
+- **Package:** `com.flashsale.inventory.infra.redis`
+- **Responsibility:** Executes revision-fenced synchronization for
+  `stock:{saleId}` and `stock:version:{saleId}` with authoritative stock and
+  revision arguments.
+- **Why it exists:** Encapsulates projection key, serialization, and script
+  execution mechanics without application decisions.
+
 ### `RedisStockDecrementAdapter`
 
 - **Package:** `com.flashsale.inventory.infra.redis`
 - **Responsibility:** Implements `StockDecrementPort`, delegates to
-  `StockDecrementLuaExecutor`, preserves raw results, and translates Redis
-  connection failure to the application-owned unavailable signal.
+  `StockDecrementLuaExecutor`, preserves deterministic results, and translates
+  indeterminate Redis transport failures to the application-owned unavailable
+  signal.
 - **Dependencies:** Application `StockDecrementPort` and
   `StockDecrementUnavailableException`, domain `SaleId`, Redis exception type,
   `StockDecrementLuaExecutor`, and Spring `@Component`.
 - **Why it exists:** Provides the hexagonal adapter boundary while keeping
   Redis exception types out of application orchestration.
 
-### `RedisStockRewarmAdapter`
+### `RedisStockProjectionSyncAdapter`
 
 - **Package:** `com.flashsale.inventory.infra.redis`
-- **Responsibility:** Implements `StockRewarmPort` with atomic Redis
-  set-if-absent using `stock:{saleId}` and durable remaining stock.
-- **Dependencies:** Application `StockRewarmPort` and
-  `StockRewarmUnavailableException`, domain `SaleId` and `StockCount`,
-  `StringRedisTemplate`, and Spring `@Component`.
-- **Why it exists:** Restores a missing counter without overwriting a newer
-  Redis value and without exposing Redis types to the application layer.
+- **Responsibility:** Implements `StockProjectionSyncPort`, maps Lua outcomes,
+  and translates projection transport failure without concealing committed
+  durable success.
+- **Dependencies:** Application projection port/result/failure types,
+  `StockProjectionSyncLuaExecutor`, and Spring `@Component`.
+- **Why it exists:** Enforces the post-commit revision fence behind the
+  application-owned port.
 
 ## Test classes
 
@@ -765,7 +734,7 @@ ports introduced during this session.
 
 - **Responsibility:** Verifies Product creation, allocations, allocation
   ceiling, duplicate Sale rejection, ownership, immutable snapshots, failed
-  allocation atomicity, reconstitution, successful fallback decrement,
+  allocation atomicity, reconstitution, successful durable decrement,
   insufficient-stock non-mutation, and decrement validation.
 - **Dependencies:** JUnit Jupiter and Inventory domain types.
 - **Why it exists:** Protects aggregate-wide invariants.
@@ -813,8 +782,8 @@ ports introduced during this session.
 
 ### `RedisScriptConfigurationTest`
 
-- **Responsibility:** Verifies classpath loading, approved script content,
-  `Long` result type, exact SHA, singleton bean identity, and SHA reuse.
+- **Responsibility:** Verifies classpath loading, result types, and singleton
+  bean identity for both integrated Lua scripts.
 - **Dependencies:** JUnit Jupiter, Spring
   `AnnotationConfigApplicationContext`, and Redis script abstractions.
 - **Why it exists:** Detects missing, altered, or repeatedly constructed Lua
@@ -832,9 +801,9 @@ ports introduced during this session.
 
 ### `RedisStockDecrementAdapterTest`
 
-- **Responsibility:** Verifies exact SaleId/quantity delegation and unchanged
-  propagation of `-2`, `-1`, zero, positive, and null executor results, plus
-  translation of Redis connection failure.
+- **Responsibility:** Verifies exact SaleId/quantity delegation, deterministic
+  result propagation, indeterminate transport classification, and fail-closed
+  handling of deterministic failures.
 - **Dependencies:** JUnit Jupiter, Mockito, `StockDecrementPort`,
   `StockDecrementLuaExecutor`, and `SaleId`.
 - **Why it exists:** Ensures the adapter remains a decision-free delegation
@@ -842,36 +811,45 @@ ports introduced during this session.
 
 ### `StockCounterServiceTest`
 
-- **Responsibility:** Verifies Redis success/sold out, cache-miss and
-  unavailable-counter fallback, fallback success/sold out/null rejection,
-  successful-fallback re-warming, durable success when re-warming is
-  unavailable, missing Product/StockLevel, invalid quantities/results, no
-  direct repository save, and exactly one invocation of each selected port.
+- **Responsibility:** Verifies one Redis attempt, exactly one durable decrement
+  for every recognized result or indeterminate failure, PostgreSQL-only result
+  authority, post-commit projection sync, committed-result preservation, and
+  invalid input/result handling.
 - **Dependencies:** JUnit Jupiter, Mockito, application ports and results, and
   Inventory domain types.
 - **Why it exists:** Protects the approved use-case orchestration and prevents
-  retries, double port invocation, or re-warming on ineligible outcomes.
+  retries, double durable invocation, or projection authority inversion.
 
-### `RedisStockRewarmAdapterTest`
+### `StockProjectionSyncLuaExecutorTest`
 
-- **Responsibility:** Verifies exact `stock:{saleId}` formatting, durable value
-  serialization, atomic set-if-absent behavior for missing and existing
-  counters, and Redis connection-failure translation.
-- **Dependencies:** JUnit Jupiter, Mockito, `StockRewarmPort`,
-  `StockRewarmUnavailableException`, `StringRedisTemplate`, `SaleId`, and
-  `StockCount`.
-- **Why it exists:** Protects safe no-overwrite Redis restoration without a
-  live Redis dependency.
+- **Responsibility:** Verifies same-slot stock/version keys, authoritative
+  stock/revision serialization, and raw Lua result propagation.
 
-### `PostgresStockFallbackAdapterTest`
+### `RedisStockProjectionSyncAdapterTest`
+
+- **Responsibility:** Verifies projection result mapping and unavailable/invalid
+  result handling behind the application-owned port.
+
+### `PostgresStockDecrementAdapterTest` and `TransactionalStockDecrementTest`
 
 - **Responsibility:** Verifies locked Product lookup, Product-owned decrement,
   managed StockLevel update/flush, sold-out non-mutation, missing Product
-  handling, `PESSIMISTIC_WRITE`, and transactional fallback declaration.
+  handling, `PESSIMISTIC_WRITE`, the proxy-visible transaction boundary, and
+  commit-before-port-return sequencing.
 - **Dependencies:** JUnit Jupiter, Mockito, Inventory domain/JPA types, Spring
   Data lock metadata, and Spring transaction metadata.
-- **Why it exists:** Protects the fallback transaction and aggregate-locking
-  contract without claiming live PostgreSQL or concurrent verification.
+- **Why it exists:** Protects the durable transaction and aggregate-locking
+  contract.
+
+### Testcontainers integration suites
+
+- **Classes:** `DurableStockDecrementIntegrationTest`,
+  `RedisPostgresFailoverIntegrationTest`, and
+  `StockProjectionSyncIntegrationTest`.
+- **Responsibility:** Verify real PostgreSQL locking/version behavior, real
+  Redis Lua behavior, recognized/indeterminate failover sequencing,
+  revision-fenced synchronization, TTL preservation, missing-key behavior,
+  and zero oversell under concurrency.
 
 ---
 
@@ -886,9 +864,9 @@ implementation slices, the session log updates, and this handoff.
 |---|---|
 | `settings.gradle` | Added `include 'services:inventory-service'` to the multi-module build. |
 | `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/ProductRepository.java` | Initially added as the JPA aggregate adapter; later updated only to implement the application ProductRepository port and add `@Override` markers. |
-| `context/SESSION_LOG.md` | Appended `SESSION-003` through `SESSION-005`; previous history was preserved. |
-| `context/CURRENT_STATE.md` | Updated the verified milestone snapshot through the Redis re-warming slice. |
-| `HANDOFF.md` | Updated this production handoff through the Redis re-warming slice. |
+| `context/SESSION_LOG.md` | Appended `SESSION-003` through `SESSION-006`; previous history was preserved. |
+| `context/CURRENT_STATE.md` | Updated the verified milestone snapshot through the durable-authority correctness gate. |
+| `HANDOFF.md` | Updated this production handoff through the durable-authority correctness gate. |
 
 ## New skeleton/configuration files
 
@@ -976,12 +954,29 @@ implementation slices, the session log updates, and this handoff.
 | `services/inventory-service/src/test/java/com/flashsale/inventory/application/StockCounterServiceTest.java` | Added re-warm orchestration, ineligible-path, and failure-safe assertions. |
 | `services/inventory-service/src/test/java/com/flashsale/inventory/infra/redis/RedisStockRewarmAdapterTest.java` | Added missing/existing counter and connection-failure tests. |
 
+This slice was completed in `10069d8`. Its request-time `SETNX` bridge was
+subsequently removed by the Revision 2 durable-authority implementation.
+
+## Durable-authority correctness slice files
+
+| Area | Files and purpose |
+|---|---|
+| Application results | `DurableStockDecrementResult.java` and `StockProjectionSyncResult.java` carry durable and projection outcomes without infrastructure types. |
+| New application ports | `DurableStockDecrementPort.java`, `DurableStockUnavailableException.java`, `StockProjectionSyncPort.java`, and `StockProjectionSyncUnavailableException.java`. |
+| Durable adapters | `PostgresStockDecrementAdapter.java` and `TransactionalStockDecrement.java` separate port return from the proxied transaction boundary. |
+| Projection adapters | `StockProjectionSyncLuaExecutor.java` and `RedisStockProjectionSyncAdapter.java` implement revision-fenced post-commit synchronization. |
+| Lua resource | `stock-projection-sync.lua` atomically fences stock updates by durable revision, preserves TTL, invalidates revisionless state, and leaves missing stock absent. |
+| Modified orchestration | `StockCounterService.java`, `RedisStockDecrementAdapter.java`, `RedisScriptConfiguration.java`, Product/JPA mapping types, and the Inventory Gradle/configuration files implement the frozen Revision 2 flow and its test support. |
+| Unit tests | Existing affected tests were updated; new coverage was added for the durable adapter/component and projection executor/adapter. |
+| Integration tests | `DurableStockDecrementIntegrationTest.java`, `RedisPostgresFailoverIntegrationTest.java`, `StockProjectionSyncIntegrationTest.java`, and shared `InventoryInfrastructureTestSupport.java` run against PostgreSQL 16 and Redis 7.2 containers. |
+| Removed compatibility bridge | `StockFallbackPort`, `StockRewarmPort`, their unavailable exceptions, `PostgresStockFallbackAdapter`, `RedisStockRewarmAdapter`, and their obsolete tests were removed. |
+
 ## Approved resource used unchanged
 
 `services/inventory-service/src/main/resources/lua/stock-decrement.lua` existed
-before the Java integration and was loaded unchanged. It is not a modified file
-from these slices. The pre-existing `stock-prewarm.lua`, `stock-release.lua`,
-and `stock-reconcile.lua` resources remain unintegrated.
+before the Java integration and remains integrated. The pre-existing
+`stock-prewarm.lua`, `stock-release.lua`, and `stock-reconcile.lua` resources
+remain unintegrated.
 
 No SaleService file was modified.
 
@@ -1039,55 +1034,48 @@ No SaleService file was modified.
 26. **Redis mechanics and business interpretation are split.**
     `StockDecrementLuaExecutor` owns mechanics, the Redis adapter implements the
     port, and `StockCounterService` interprets raw outcomes.
-27. **The executor is decision-free; the Redis adapter translates only
-    connectivity.** Raw nullable results pass through unchanged, while
-    `RedisConnectionFailureException` becomes the application-owned unavailable
-    signal.
+27. **The executor is decision-free; the Redis adapter owns transport
+    classification.** Connection, timeout, and transport failures are
+    indeterminate; deterministic failures fail closed.
 28. **Application ports expose no infrastructure types.**
 29. **StockCounterService must not bypass Product.** It loads Product and
-    resolves the owned StockLevel before calling the decrement port.
-30. **Cache miss and primary-counter unavailability select the fallback.** The
-    service invokes `StockFallbackPort` once and performs no retry.
-31. **Current Redis success performs no JPA save.** PostgreSQL is not updated by
-    the completed service slice.
-32. **Error handling is layer-specific.** Expected decrement outcomes use the
-    sealed result; missing domain state and invalid infrastructure results are
-    exceptions until an API contract is separately approved.
-33. **Tests are focused per slice.** Completed tests are unit tests; no live
-    Redis/PostgreSQL behavior is claimed.
-34. **No unrelated refactoring is permitted.** SaleService was not changed.
-35. **Excluded capabilities remain excluded.** No Kafka, Inventory GET
-    endpoint, Reservation/Week 4 work, release, or reconciliation was added.
-36. **Fallback mutation belongs to Product.** `Product.decrementStock` owns
-    current-stock validation, sold-out non-mutation, and StockLevel version
-    advancement.
-37. **Fallback locking is aggregate-root locking.**
-    `findByIdForUpdate` uses `PESSIMISTIC_WRITE` on Product, serializing
-    fallback decrements without exposing a StockLevel repository.
-38. **Fallback is one transaction.** Lock, domain mutation, mapper application,
-    managed StockLevel update, and flush occur inside
-    `PostgresStockFallbackAdapter.decrement`.
-39. **The mapper remains the sole domain/JPA translation boundary.**
-    `ProductPersistenceMapper.applyCurrentStock` applies the successful domain
-    result to the managed StockLevel.
-40. **Fallback returns only success or sold out.** A present `StockCount` is
-    success; an empty optional is insufficient durable stock.
-41. **Redis success still does not update PostgreSQL.** The fallback is selected
-    only for cache miss or the translated unavailable signal.
-42. **Only successful fallback selects re-warming.** A present durable
-    StockCount invokes `StockRewarmPort` once; fallback sold out and all
-    Redis-native outcomes do not.
-43. **Re-warming is atomic and no-overwrite.**
-    `RedisStockRewarmAdapter` uses Redis set-if-absent on `stock:{saleId}` and
-    never replaces an existing counter.
-44. **Durable success wins over cache restoration.** A translated re-warm
-    connection failure does not reverse or hide the committed PostgreSQL
-    decrement.
-45. **Re-warming remains separate from pre-warm.** It adds no Lua script,
-    warmed marker, TTL, trigger, retry, or sale-timing input.
-46. **Excluded side effects remain excluded.** There is no pre-warm,
-    audit/log table, REST, Kafka, Reservation, release, or reconciliation
-    behavior.
+    resolves the owned StockLevel before calling outbound decrement ports.
+30. **Every recognized Redis result and every indeterminate failure selects
+    durable authority exactly once.** There is no Redis retry.
+31. **PostgreSQL exclusively decides success or sold out.** Redis decrement
+    results never determine the client-visible outcome.
+32. **Durable mutation belongs to Product.** `Product.decrementStock` owns
+    validation, sold-out non-mutation, and StockLevel version advancement.
+33. **Locking remains aggregate-root locking.** `findByIdForUpdate` uses
+    `PESSIMISTIC_WRITE` on Product; there is no StockLevel repository.
+34. **The durable transaction is proxy-visible.**
+    `TransactionalStockDecrement` owns lock, mutation, managed update, flush,
+    and revision retrieval; `PostgresStockDecrementAdapter` returns after
+    commit.
+35. **Redis I/O occurs outside the PostgreSQL transaction.** Projection
+    synchronization starts only after the durable port returns.
+36. **The mapper remains the sole domain/JPA translation boundary.** It applies
+    the successful domain result to the managed StockLevel.
+37. **The durable result includes the child revision.** Post-commit projection
+    synchronization is fenced by the flushed StockLevel revision.
+38. **Stock and revision keys share the SaleId hash tag.** The keys are
+    `stock:{saleId}` and `stock:version:{saleId}`.
+39. **Equal or newer durable revisions apply; older revisions are ignored.**
+    This permits idempotent repair without stale overwrite.
+40. **Missing and revisionless projections are distinct.** Missing stock is not
+    recreated; revisionless stock is invalidated.
+41. **Projection synchronization preserves the existing stock TTL.** It does
+    not invent sale timing or pre-warm policy.
+42. **Committed durable success wins over projection failure.** Unavailable or
+    null synchronization warns but cannot change the returned durable result.
+43. **There is no retry, compensation, legacy fallback, or request-time
+    re-warming bridge.**
+44. **Real infrastructure behavior is part of the gate.** PostgreSQL and Redis
+    Testcontainers suites cover locking, concurrency, failover, and fencing.
+45. **No unrelated refactoring is permitted.** SaleService was not changed by
+    the implementation slice.
+46. **Excluded capabilities remain excluded.** No pre-warm use case, REST,
+    Kafka, Reservation/Week 4 work, release, or reconciliation was added.
 
 ---
 
@@ -1109,8 +1097,8 @@ architecture decision changes it.
 - Product and StockLevel versions can never be negative.
 - Product collection access must return immutable snapshots.
 - Failed allocation must add no child and increment no version.
-- Insufficient fallback stock must not mutate the owned StockLevel.
-- Successful fallback decrement must reduce current stock by exactly the
+- Insufficient durable stock must not mutate the owned StockLevel.
+- Successful durable decrement must reduce current stock by exactly the
   positive requested quantity and advance the StockLevel domain version.
 - Stock arithmetic must retain overflow and underflow checks.
 - SaleId remains an opaque cross-context identifier.
@@ -1134,23 +1122,29 @@ architecture decision changes it.
 
 - Atomic decrement remains a Redis Lua operation.
 - The stock key remains exactly `stock:{saleId}`.
+- The projection revision key remains exactly `stock:version:{saleId}`.
 - The script return contract remains `-2`, `-1`, or non-negative.
-- Executor and Redis adapter do not interpret numeric business results; the
-  adapter translates only Redis connection failure.
+- Executors do not interpret business outcomes; the decrement adapter alone
+  classifies deterministic versus indeterminate Redis failures.
 - `StockCounterService` resolves allocation through Product before decrement.
-- One service call invokes `StockDecrementPort` at most once.
+- One service call invokes `StockDecrementPort` at most once and invokes
+  `DurableStockDecrementPort` exactly once for every recognized Redis result or
+  indeterminate Redis failure.
 - Unknown negative, null, and out-of-`int` port values are rejected.
-- Cache miss or primary-counter unavailability invokes `StockFallbackPort`
-  exactly once, with no retry.
-- A successful Redis decrement currently causes no ProductRepository save.
-- PostgreSQL fallback holds the Product `PESSIMISTIC_WRITE` lock through the
+- PostgreSQL exclusively determines the returned `Decremented` or `SoldOut`
+  result.
+- PostgreSQL holds the Product `PESSIMISTIC_WRITE` lock through the
   authoritative domain decrement and managed StockLevel flush.
-- A present fallback result invokes `StockRewarmPort` exactly once with the
-  durable remaining StockCount; an empty result never re-warms.
-- Re-warming uses atomic set-if-absent on `stock:{saleId}` and never overwrites
-  an existing counter.
-- Re-warm unavailability cannot change a committed durable success into a
-  failed result.
+- The durable port returns only after commit and carries the flushed child
+  revision.
+- Projection synchronization occurs after commit and uses same-slot stock and
+  revision keys.
+- Equal/newer revisions apply; strictly older revisions cannot overwrite stock.
+- Revisionless stock is invalidated, missing stock is not recreated, and an
+  existing stock TTL is preserved.
+- Projection unavailability or a null sync result cannot change a committed
+  durable result into a failed result.
+- No legacy fallback or request-time re-warming compatibility bridge remains.
 - Stock must never become negative under concurrency or infrastructure failure.
 
 ---
@@ -1162,6 +1156,8 @@ architecture decision changes it.
 The following are all Gradle project, build, property, and test commands used
 during the approved implementation slices. Repeated commands are listed with
 the slice in which each run occurred because the passing test count changed.
+Entries through Redis re-warming are historical evidence for their named
+commits; the durable-authority gate is the current baseline.
 
 ### Skeleton
 
@@ -1308,35 +1304,48 @@ Results:
 - The executable JAR contains `StockRewarmPort`,
   `StockRewarmUnavailableException`, and `RedisStockRewarmAdapter`.
 
+### Durable-authority correctness gate
+
+Inventory verification:
+
+```bash
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+```
+
+Result: `BUILD SUCCESSFUL` in 41 seconds; 126 tests passed with zero failures,
+errors, or skips. The 17 runnable test classes comprise 105 unit tests and 21
+PostgreSQL/Redis Testcontainers tests.
+
+Complete repository verification:
+
+```bash
+./gradlew clean build
+```
+
+Result: `BUILD SUCCESSFUL` in 1 minute 6 seconds. InventoryService passed all
+126 tests and SaleService passed all 16 tests, with zero failures, errors, or
+skips. Domain framework-import, application dependency-direction, prohibited
+scope, legacy bridge/fallback/re-warm, and unintegrated capability scans were
+clean at implementation commit `bca1ff1`.
+
 ## Latest successful build
 
 ```text
-Command: ./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+Command: ./gradlew clean build
 Result:  BUILD SUCCESSFUL
-Time:    25 seconds
-Tests:   71 passed, 0 failed, 0 skipped
+Time:    1 minute 6 seconds
+Tests:   Inventory 126; Sale 16; 0 failed, 0 errors, 0 skipped
 ```
 
 ## Passing test inventory
 
-| Test class | Passing tests |
-|---|---:|
-| `ProductTest` | 14 |
-| `StockLevelTest` | 6 |
-| `StockCountTest` | 7 |
-| `TypedIdTest` | 4 |
-| `ProductPersistenceMapperTest` | 3 |
-| `ProductRepositoryTest` | 3 |
-| `RedisScriptConfigurationTest` | 1 |
-| `StockDecrementLuaExecutorTest` | 5 |
-| `RedisStockDecrementAdapterTest` | 6 |
-| `RedisStockRewarmAdapterTest` | 3 |
-| `StockCounterServiceTest` | 15 |
-| `PostgresStockFallbackAdapterTest` | 4 |
-| **Total** | **71** |
+| Inventory test category | Runnable classes | Passing tests |
+|---|---:|---:|
+| Unit | 14 | 105 |
+| PostgreSQL/Redis Testcontainers integration | 3 | 21 |
+| **Inventory total** | **17** | **126** |
 
-All 71 are unit tests. There is no Testcontainers, live PostgreSQL, live Redis,
-concurrent integration, or full application-context test yet.
+The complete repository build also runs 16 passing SaleService tests.
 
 Non-failing warnings observed:
 
@@ -1347,30 +1356,23 @@ Non-failing warnings observed:
 
 ## Known unresolved technical assumptions
 
-- Product manually increments its domain version on allocation while JPA maps
-  that value with `@Version`. Unit mapping is verified, but detached-update
-  semantics have not been proven against real Hibernate/PostgreSQL.
 - StockCounterService currently loads Product from PostgreSQL before every
-  Redis decrement. This preserves the approved aggregate check but conflicts
-  with the stated Redis-only hot-path performance goal. Do not remove the load
-  without an explicit architecture decision.
-- Product now exposes the approved immutable-StockLevel replacement command
-  for fallback, but its pessimistic/optimistic version interaction has not been
-  verified against real Hibernate/PostgreSQL or concurrent transactions.
-- No live Redis test has proved the Lua script against a real Redis server.
-- Redis re-warming uses atomic set-if-absent and is unit-tested only; no live
-  Redis or concurrent fallback/re-warm race has been verified.
-- Re-warmed counters have no TTL because Inventory has no approved sale-end
-  input. TTL ownership remains part of the separate pre-warm decision.
-- Re-warm connection failure preserves durable success but currently emits no
-  log or metric.
-- Redis failure after possible server-side decrement remains an unresolved
-  ambiguous-execution risk.
-- `StockDecrementPort` intentionally returns nullable `Long`; executor and
-  adapter pass numeric/null results through, the adapter translates Redis
-  connection failure, and StockCounterService rejects null.
-- Existing pre-warm, release, and reconcile Lua files are resources only. Their
-  presence does not mean they are integrated.
+  Redis decrement. This frozen ownership check and the authoritative
+  PostgreSQL decrement add database latency; do not remove either without a new
+  architecture decision.
+- Product-root `PESSIMISTIC_WRITE` intentionally serializes decrements for the
+  same Product, including distinct SaleIds under that Product.
+- Revisionless Redis stock is invalidated on synchronization. Pre-warm must
+  initialize the compatible stock revision key or the first request can remove
+  that stock projection.
+- Projection behavior is verified against standalone Redis 7.2; cluster routing
+  still depends on preserving the shared SaleId hash tag in both keys.
+- A response can still be lost after PostgreSQL commit. Retry/idempotency at the
+  API or order boundary is not part of this slice.
+- The separate pre-warm, release, and reconcile Lua resources do not represent
+  integrated use cases.
+- SaleService still needs an approved migration to the Inventory decrement
+  contract; no cross-service API was added here.
 - Legacy schema documents describe fields and tables that are absent from the
   approved minimal JPA/Flyway model.
 
@@ -1384,16 +1386,13 @@ Only unfinished work appears in this section.
 
 - Integrate the existing `lua/stock-prewarm.lua` through configuration,
   executor, Redis-neutral port, and adapter.
-- Add an application use case for pre-warming.
-- Preserve same-slot keys `stock:{saleId}` and
-  `stock:warmed:{saleId}`.
+- Initialize a revision compatible with
+  `stock:version:{saleId}` as required by the active projection fence.
+- Add the approved application trigger/input contract without introducing
+  Kafka or a new endpoint by assumption.
 - Pass total stock and TTL.
-- Preserve the script contract `1 = warmed`, `0 = already warmed`.
-- Explicitly decide how Inventory obtains sale start/end data and how pre-warm
-  is triggered. Kafka and new endpoints remain excluded unless separately
-  approved.
-- Define TTL as `saleEnd - now + 600 seconds` only after the required sale-end
-  input contract is approved.
+- Preserve same-slot keys and the approved TTL rule once sale-end ownership is
+  defined.
 
 ## 2. Property-based tests
 
@@ -1405,38 +1404,21 @@ Only unfinished work appears in this section.
 - Prove insufficient stock never changes the counter.
 - Cover boundary values, integer limits, and repeated operations.
 
-## 3. Failure tests
+## 3. Regression maintenance
 
-- Execute the decrement Lua script against real Redis.
-- Verify cache miss, sold out, insufficient stock, zero transition, and
-  successful quantities.
-- Verify live Redis-unavailable behavior invokes PostgreSQL fallback.
-- Verify database lock contention is serialized and never oversells.
-- Verify against live infrastructure that database success plus Redis re-warm
-  failure returns the durable success and remains recoverable.
-- Verify malformed/unexpected Redis results remain rejected.
-- Verify Flyway plus Hibernate validation against a real Inventory database.
-- Verify the unresolved Product/JPA optimistic version behavior.
-
-## 4. Regression tests
-
-- Retain all 71 current unit tests unchanged unless an approved contract
-  intentionally evolves.
-- Add integration coverage for Product aggregate persistence with owned
-  StockLevels.
-- Add concurrent Redis decrement coverage proving zero oversell.
-- Add concurrent PostgreSQL fallback coverage proving zero oversell.
-- Add regression coverage proving one authoritative decrement when Redis
-  fails before, during, or after execution.
+- Retain all 126 Inventory tests unless an approved contract intentionally
+  evolves.
+- Extend the real-infrastructure suites alongside any pre-warm change so
+  revision fencing, TTL preservation, and zero-oversell behavior remain
+  protected.
 - Run the full Inventory module build after every slice.
 
-## 5. Week 3 documentation reconciliation
+## 4. Week 3 documentation reconciliation
 
 - Update `context/PROJECT_TRUTH.md` to current repository reality.
-- Update `context/CURRENT_STATE.md` at the correct milestone boundary.
 - Record which legacy Build Plan and Database Schema statements are obsolete.
 - Update `context/REPOSITORY_INDEX.md` for InventoryService files/directories.
-- Mark Week 3 complete only after pre-warm and correctness tests pass.
+- Mark Week 3 complete only after the pre-warm and property-based slices pass.
 
 Kafka integration, Inventory GET endpoints, Reservation/Week 4 work, release,
 and reconciliation are not remaining Week 3 tasks and must not be introduced.
@@ -1473,11 +1455,12 @@ and reconciliation are not remaining Week 3 tasks and must not be introduced.
 17. Preserve the approved Lua script contracts and Redis key format.
 18. Never replace atomic Lua decrement with a client-side read/check/write
     sequence.
-19. Any fallback must guarantee exactly one authoritative decrement.
-20. Preserve successful-fallback-only re-warming and atomic set-if-absent;
-    never overwrite an existing Redis counter.
-21. Do not add a re-warm TTL until the sale-end input and ownership contract is
-    separately approved.
+19. Preserve exactly one PostgreSQL authoritative decrement for every
+    recognized Redis result or indeterminate Redis failure.
+20. Preserve revision-fenced, post-commit projection synchronization; do not
+    restore the legacy fallback/re-warm compatibility bridge.
+21. Do not recreate missing stock during projection sync; pre-warm owns stock
+    creation and TTL initialization under a separately approved contract.
 22. Do not modify SaleService unless the approved slice makes it strictly
     necessary.
 23. Do not add Kafka, REST endpoints, DTOs, Reservation/Week 4 work, release,

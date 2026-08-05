@@ -1815,3 +1815,230 @@ Additional verification:
 
 Week 3 remains in progress. Kafka, Inventory REST, Reservation/Week 4, retry
 logic, release, and reconciliation remain excluded.
+
+---
+
+## SESSION-006
+**Date:** 2026-08-04
+**Milestone:** Week 3 — Durable-Authority Correctness Gate
+**Outcome:** COMPLETE
+**Engineer:** Tarun K Y
+**Branch:** `main`
+**Implementation commit:** `bca1ff1` (`Week 3 implementation`)
+
+---
+
+### Implementation scope
+
+Implemented Revision 2 of
+`Inventory-Durable-Authority-Correctness-Implementation-Handoff.md` exactly.
+The previously completed Redis re-warming slice at `10069d8` remains part of
+the history, but its request-time `SETNX` implementation was replaced by the
+approved durable-authority design.
+
+Canonical flow:
+
+```text
+Product validation
+  -> one Redis Lua attempt
+  -> one PostgreSQL durable decrement
+  -> commit
+  -> revision-fenced Redis synchronization
+  -> PostgreSQL-derived Decremented/SoldOut result
+```
+
+Explicitly excluded: pre-warm scheduling and sale timing, TTL calculation,
+reservation/idempotency/expiry/release/reconciliation, REST, DTOs, Kafka,
+events/outbox/retries/DLQ, circuit breakers, performance redesign, SaleService,
+schema migration, and Redis Cluster topology testing.
+
+### Architectural decisions
+
+- PostgreSQL `stock_levels.current_stock` is authoritative for every returned
+  decrement outcome; Redis is an atomic projection/admission mechanism.
+- Every recognized Redis outcome and indeterminate Redis transport failure
+  invokes PostgreSQL exactly once. Invalid deterministic results fail closed.
+- `StockCounterService` is non-transactional. Redis executes outside the
+  PostgreSQL transaction.
+- `TransactionalStockDecrement` owns the Product-root `PESSIMISTIC_WRITE`
+  transaction, mapping, domain mutation, managed StockLevel update, flush, and
+  revision retrieval.
+- `PostgresStockDecrementAdapter` calls the separately proxied transactional
+  component, so commit completes before the durable port returns and commit
+  failures are translated to `DurableStockUnavailableException`.
+- PostgreSQL exclusively determines `Decremented` or `SoldOut`; Redis/PostgreSQL
+  disagreement emits a warning.
+- Redis synchronization runs only after commit. Its failure preserves and
+  warns on the committed durable result; there is no retry or compensation.
+- StockLevel version is the Redis projection revision. Product version remains
+  unchanged by decrement.
+- Projection keys are `stock:{saleId}` and `stock:version:{saleId}` with the
+  same Redis hash tag.
+- Equal/newer revisions apply authoritative stock; strictly older revisions
+  are ignored. Missing stock remains missing, and revisionless stock is
+  atomically invalidated.
+- Applied synchronization preserves the stock key expiry exactly and mirrors
+  that absolute expiry to the revision key.
+- Product remains the aggregate root, the domain remains framework-free, and
+  no StockLevel repository, schema change, or service dependency was added.
+
+### Files created
+
+Governance:
+
+- `Inventory-Durable-Authority-Correctness-Implementation-Handoff.md`
+
+Production:
+
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/DurableStockDecrementResult.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/StockProjectionSyncResult.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/port/DurableStockDecrementPort.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/port/DurableStockUnavailableException.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/port/StockProjectionSyncPort.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/port/StockProjectionSyncUnavailableException.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/PostgresStockDecrementAdapter.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/TransactionalStockDecrement.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/redis/RedisStockProjectionSyncAdapter.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/redis/StockProjectionSyncLuaExecutor.java`
+- `services/inventory-service/src/main/resources/lua/stock-projection-sync.lua`
+
+Tests:
+
+- `services/inventory-service/src/test/java/com/flashsale/inventory/infra/persistence/PostgresStockDecrementAdapterTest.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/infra/persistence/TransactionalStockDecrementTest.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/infra/redis/RedisStockProjectionSyncAdapterTest.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/infra/redis/StockProjectionSyncLuaExecutorTest.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/integration/InventoryInfrastructureTestSupport.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/integration/DurableStockDecrementIntegrationTest.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/integration/RedisPostgresFailoverIntegrationTest.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/integration/StockProjectionSyncIntegrationTest.java`
+
+### Files modified
+
+- `services/inventory-service/build.gradle`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/StockCounterService.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/application/StockDecrementResult.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/config/RedisScriptConfiguration.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/ProductPersistenceMapper.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/ProductRepository.java`
+- `services/inventory-service/src/main/java/com/flashsale/inventory/infra/redis/RedisStockDecrementAdapter.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/application/StockCounterServiceTest.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/infra/config/RedisScriptConfigurationTest.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/infra/persistence/ProductPersistenceMapperTest.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/infra/persistence/ProductRepositoryTest.java`
+- `services/inventory-service/src/test/java/com/flashsale/inventory/infra/redis/RedisStockDecrementAdapterTest.java`
+
+Superseded legacy files removed:
+
+- `StockFallbackPort`, `StockRewarmPort`, and
+  `StockRewarmUnavailableException`
+- `PostgresStockFallbackAdapter` and `RedisStockRewarmAdapter`
+- `PostgresStockFallbackAdapterTest` and `RedisStockRewarmAdapterTest`
+
+No domain, JPA entity, Spring Data repository, Flyway migration, existing Lua,
+application configuration, root Gradle/settings, SaleService, REST, Kafka,
+Reservation, release, reconciliation, or deployment file changed.
+
+### Tests added and extended
+
+- Durable adapter/component unit tests cover delegation, locking, transaction
+  ownership, post-flush revision retrieval, insufficient-stock non-mutation,
+  and database/transaction/commit failure translation.
+- StockCounterService unit tests cover all recognized Redis outcomes,
+  indeterminate transport failure, PostgreSQL-derived results, disagreement
+  warnings, fail-closed invalid Redis results, post-commit synchronization,
+  synchronization failure preservation, and no retries.
+- Redis unit tests cover connection loss and timeout translation while
+  deterministic script/serialization failures remain fail-closed, plus sync
+  key construction, result-code mapping, and script bean identity.
+- Real PostgreSQL tests cover Flyway/Hibernate validation, successful and
+  insufficient version behavior, Product version stability, deferred commit
+  failure rollback, and concurrent pessimistic locking without oversell.
+- Real Redis/cross-store tests cover Lua success, cache miss, unavailable Redis,
+  failure before and after Lua execution, both disagreement directions,
+  revision fencing, equal-revision repair, out-of-order sync, persistent and
+  expiring TTL preservation, revision-key loss invalidation, and concurrent
+  cache misses that remain absent from Redis.
+
+### Build verification
+
+Required Inventory command:
+
+```bash
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL in 41s
+126 Inventory tests passed, 0 failed, 0 errors, 0 skipped
+```
+
+Final whole-project gate:
+
+```bash
+./gradlew clean build
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL in 1m 6s
+InventoryService: 126 passed
+SaleService: 16 passed
+0 failed, 0 errors, 0 skipped
+```
+
+Final Inventory inventory:
+
+- 30 production Java files.
+- 17 runnable test classes.
+- 105 unit tests and 21 real Testcontainers tests.
+- 126 total Inventory tests.
+
+Additional verification:
+
+- All 21 PostgreSQL/Redis Testcontainers tests passed together.
+- `git diff --check` passed.
+- Domain, ports, and application dependency scans passed; the existing
+  application `@Service` stereotype remains the only permitted Spring import.
+- Testcontainers is absent from production runtime dependencies.
+- Protected/forbidden paths were unchanged.
+- No temporary compatibility bridge or legacy fallback/re-warm type remains.
+- The executable JAR contains the new contracts, adapters, transactional
+  component, executor, and `stock-projection-sync.lua`.
+- Test workers set Docker API 1.40 because Spring Boot 3.3.4 manages
+  Testcontainers 1.19.8 while the verified Docker 29 daemon requires API 1.40
+  or newer.
+
+### Remaining risks and assumptions
+
+- A PostgreSQL transaction and Product-root lock on every potentially
+  successful request increase latency and contention.
+- Product-root locking serializes different sales for the same Product.
+- Missing or revisionless Redis stock stays missing until a future pre-warm;
+  independent revision-key loss can increase PostgreSQL load.
+- Future pre-warm/reconciliation must create compatible revision keys.
+- Standalone Redis Testcontainers coverage does not prove Redis Cluster
+  topology behavior.
+- A committed response lost before the client receives it can be retried and
+  decrement again; cross-request idempotency remains out of scope.
+- StockCounterService still performs the approved Product validation read
+  before Redis.
+- The SaleService migration defect remains outside this slice.
+- `PROJECT_TRUTH.md`, `REPOSITORY_INDEX.md`, and legacy planning/schema
+  statements remain stale.
+
+### Remaining Week 3 roadmap
+
+1. Approve the pre-warm trigger/source and sale-timing contract; pre-warm must
+   initialize stock and revision keys compatibly with revision fencing.
+2. Add property-based stock correctness tests.
+3. Add any remaining regression/operational tests approved after the durable
+   authority gate; Redis Cluster topology testing remains a separate scope.
+4. Reconcile `PROJECT_TRUTH.md`, `REPOSITORY_INDEX.md`, and obsolete Build Plan
+   and Database Schema statements.
+
+Week 3 remains in progress. Kafka, Inventory REST, Reservation/Week 4,
+cross-request idempotency, retries, release, and reconciliation remain excluded.

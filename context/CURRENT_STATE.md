@@ -1,7 +1,7 @@
 # CURRENT_STATE.md
 **Milestone:** Week 3 — InventoryService
 **Status:** 🟡 IN PROGRESS
-**Date:** 2026-07-25
+**Date:** 2026-08-04
 **Engineer:** Tarun K Y
 
 ---
@@ -11,11 +11,12 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `10069d8` — `feat(inventory): add Redis re-warming after PostgreSQL fallback` |
-| Build | `BUILD SUCCESSFUL` in 25s |
-| Production types | 25 |
-| Test classes | 12 |
-| Tests | 71 passed, 0 failed, 0 skipped |
+| Latest commit | `bca1ff1` — `Week 3 implementation` |
+| Build | Whole-project `BUILD SUCCESSFUL` in 1m 6s |
+| Production Java files | 30 |
+| Test classes | 17 |
+| Inventory tests | 126 passed, 0 failed, 0 errors, 0 skipped |
+| SaleService regression | 16 passed, 0 failed, 0 errors, 0 skipped |
 
 ---
 
@@ -28,10 +29,12 @@
 | ✔ Inventory Persistence | Separate JPA entities, isolated mapper, ProductRepository application port and JPA adapter, entity-graph loading, optimistic versions |
 | ✔ Inventory Flyway Migration | `products` and `stock_levels` with PK, FK, stock/version checks, and unique Product + Sale allocation |
 | ✔ Redis Lua Integration | Approved `stock-decrement.lua`, singleton typed script bean, SHA caching, and Lua executor |
-| ✔ Redis Adapter | Redis-neutral StockDecrementPort; raw result preservation; Redis connection failures translated to an infrastructure-neutral unavailable signal |
-| ✔ StockCounterService | Product-owned allocation validation; Redis success/sold-out mapping; one fallback call on cache miss or primary-counter unavailability |
-| ✔ PostgreSQL Fallback | Product-owned domain decrement; StockFallbackPort; transactional Postgres adapter; Product-root `PESSIMISTIC_WRITE`; managed StockLevel update and flush; success/sold-out outcomes |
-| ✔ Redis Re-warming | StockRewarmPort; atomic Redis `SETNX` adapter; successful-fallback-only restoration from durable remaining stock; existing counters preserved; re-warm unavailability does not reverse durable success |
+| ✔ Redis Adapter | Redis-neutral `StockDecrementPort`; raw result preservation; connection loss, timeout, and indeterminate transport failures translated; deterministic failures remain fail-closed |
+| ✔ Redis Re-warming | Completed at `10069d8`; its `SETNX` implementation was subsequently replaced by the approved revision-fenced projection synchronization gate |
+| ✔ Durable PostgreSQL Authority | `DurableStockDecrementPort`; separately proxied `TransactionalStockDecrement`; Product-root `PESSIMISTIC_WRITE`; commit-before-return; StockLevel revision returned with authoritative stock |
+| ✔ Canonical StockCounterService | Product validation; one Redis attempt; one durable invocation for every recognized/indeterminate Redis outcome; PostgreSQL-derived result; warning on disagreement; post-commit synchronization |
+| ✔ Revision-fenced Redis Projection | `StockProjectionSyncPort`; stock/version hash-tagged keys; equal/newer apply, older ignore, revisionless invalidation, TTL preservation and mirroring |
+| ✔ Infrastructure Correctness Tests | Real PostgreSQL and Redis Testcontainers coverage for Flyway/Hibernate, commit failure, concurrency, ambiguous Lua execution, disagreement, fencing, missing keys, and TTL behavior |
 
 ---
 
@@ -39,11 +42,16 @@
 
 ```text
 ./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
-BUILD SUCCESSFUL in 25s
-71 tests passed, 0 failed, 0 skipped
+BUILD SUCCESSFUL in 41s
+126 tests passed, 0 failed, 0 errors, 0 skipped
+
+./gradlew clean build
+BUILD SUCCESSFUL in 1m 6s
+Inventory: 126 passed; SaleService: 16 passed; 0 failed/errors/skipped
 ```
 
-All InventoryService tests are unit tests.
+Inventory verification comprises 105 unit tests and 21 real PostgreSQL/Redis
+Testcontainers tests.
 
 ---
 
@@ -65,18 +73,22 @@ audit, outbox, Kafka, or Week 4 table exists.
 - JPA entities remain separate; ProductPersistenceMapper owns translation.
 - Flyway owns schema changes; Hibernate remains `ddl-auto: validate`.
 - Product and StockLevel retain optimistic version mapping.
-- Redis decrement remains atomic Lua using `stock:{saleId}`.
+- PostgreSQL `stock_levels.current_stock` is authoritative for every returned
+  decrement outcome; Redis is an atomic admission/projection mechanism.
+- Redis decrement remains one atomic Lua attempt using `stock:{saleId}`.
 - Lua results remain `-2` cache miss, `-1` sold out, or non-negative stock.
-- Executor remains business-decision-free; the Redis adapter translates only
-  Redis connection failure into the application-owned unavailable signal.
+- Executors remain business-decision-free; the Redis decrement adapter
+  translates only indeterminate transport failures into the durable path.
 - Application services depend on ports and access StockLevel through Product.
-- PostgreSQL fallback locks the Product aggregate root with
-  `PESSIMISTIC_WRITE`, mutates stock through `Product.decrementStock`, and
-  persists the managed owned StockLevel in one transaction.
-- Successful fallback re-warms `stock:{saleId}` from the durable remaining
-  StockCount through `StockRewarmPort`.
-- Redis re-warming uses atomic set-if-absent, never overwrites an existing
-  counter, and remains best-effort after the durable decrement commits.
+- `TransactionalStockDecrement` owns the Product-root lock, mapping, domain
+  mutation, managed update, flush, and revision retrieval transaction.
+- Commit completes before `DurableStockDecrementPort` returns.
+- Post-commit synchronization uses `stock:{saleId}` and
+  `stock:version:{saleId}` through `StockProjectionSyncPort`.
+- Strictly older revisions are ignored; equal/newer revisions reapply the
+  authoritative state without changing the stock key's expiry.
+- Missing stock remains missing; revisionless stock is atomically invalidated.
+- Synchronization failure is warned and cannot conceal the committed result.
 - No Kafka, Inventory REST API, Reservation, release, or reconciliation is in scope.
 
 ---
@@ -92,29 +104,29 @@ audit, outbox, Kafka, or Week 4 table exists.
 - Product and StockLevel versions are never negative.
 - Failed allocations do not mutate Product or increment its version.
 - Redis decrement is never replaced by a client-side read/check/write sequence.
-- Cache miss or primary-counter unavailability invokes the fallback port once.
-- PostgreSQL fallback performs one authoritative decrement while holding the
-  Product aggregate-root lock.
-- Only successful fallback invokes re-warming; Redis success and sold-out paths
-  do not.
-- Re-warming may create a missing counter but never overwrite an existing one.
+- Every recognized Redis result and every indeterminate transport failure
+  invokes the durable port exactly once.
+- PostgreSQL exclusively determines `Decremented` or `SoldOut`.
+- Every successful durable mutation advances only the StockLevel version.
+- Redis synchronization occurs only after durable completion and never retries.
+- A missing stock key is never recreated by request-time synchronization.
 
 ---
 
 ## Known Risks
 
-- Product/JPA version updates are not verified against real PostgreSQL.
 - StockCounterService currently loads Product before every Redis decrement.
-- PostgreSQL fallback locking and version behavior are unit-tested but not
-  verified against live PostgreSQL or under concurrent contention.
-- Lua has not been executed against live Redis in tests.
-- Redis set-if-absent re-warming and concurrent fallback/re-warm races are
-  unit-tested only, not verified against live Redis.
-- Re-warmed counters have no TTL because Inventory still has no approved
-  sale-end input; TTL ownership remains part of the pre-warm decision.
-- Re-warm connection failure preserves durable success but currently emits no
-  log or metric.
-- No live infrastructure or concurrent correctness tests exist.
+- A PostgreSQL transaction and Product-root lock on every potentially
+  successful request increase latency and contention.
+- Product-root locking serializes different sales for the same Product.
+- Missing or revisionless Redis stock remains unavailable until pre-warm;
+  independent revision-key eviction can increase PostgreSQL load.
+- Future pre-warm/reconciliation must write compatible revision keys.
+- Standalone Redis Testcontainers coverage does not prove Redis Cluster
+  topology behavior.
+- A committed response lost before the client receives it can be retried and
+  decrement again; cross-request idempotency remains out of scope.
+- The SaleService migration defect remains outside this slice.
 - `PROJECT_TRUTH.md` and `REPOSITORY_INDEX.md` remain stale.
 
 ---
@@ -123,13 +135,15 @@ audit, outbox, Kafka, or Week 4 table exists.
 
 - ➡ Pre-warm Use Case
 - ➡ Property-based Tests
-- ➡ Failure Tests
-- ➡ Regression Tests
+- ✔ Durable-authority live failure, version, and concurrency tests
+- ➡ Remaining regression/property tests
+- ➡ Documentation reconciliation
 
 ---
 
 ## Next Recommended Task
 
-**Pre-warm Use Case:** approve the sale timing/trigger input, then integrate the
-existing `stock-prewarm.lua`. Do not add REST, Kafka, Reservation, release,
-reconciliation, or retry logic without separate approval.
+**Pre-warm Use Case:** approve the sale timing/trigger input and ensure pre-warm
+initializes both stock and revision keys compatibly with the fenced projection
+contract. Do not add REST, Kafka, Reservation, release, reconciliation, or
+retry logic without separate approval.

@@ -20,6 +20,7 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:junit-jupiter'
     testImplementation 'org.testcontainers:postgresql'
+    testImplementation 'net.jqwik:jqwik:1.9.0'
 }
 
 tasks.named('test') {
