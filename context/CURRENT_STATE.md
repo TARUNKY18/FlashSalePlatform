@@ -1,6 +1,6 @@
 # CURRENT_STATE.md
-**Milestone:** Week 3 — InventoryService
-**Status:** ✅ COMPLETE
+**Milestone:** Week 4 — Reservation (in progress)
+**Status:** 🟡 IN PROGRESS
 **Date:** 2026-08-06
 **Engineer:** Tarun K Y
 
@@ -11,12 +11,12 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `7b68f14` — `implemented redis-pre-warm` |
-| Implementation commit status | All slices committed. Working tree: clean. HEAD: `7b68f14` |
-| Build | Whole-project `BUILD SUCCESSFUL` in 23s |
-| Production Java files | 44 |
-| Test classes | 26 |
-| Inventory tests | 163 passed, 0 failed, 0 errors, 0 skipped |
+| Latest commit | `713d2d2` — `feat(inventory): implement reservation domain aggregate` |
+| Implementation commit status | All Week 3 and Week 4 Slice 1 committed. Working tree: clean. HEAD: `713d2d2` |
+| Build | `BUILD SUCCESSFUL` in 47s |
+| Production Java files | 50 |
+| Test classes | 28 |
+| Inventory tests | 210 passed, 0 failed, 0 errors, 0 skipped |
 | SaleService regression | 16 passed, 0 failed, 0 errors, 0 skipped |
 
 ---
@@ -39,22 +39,19 @@
 | ✔ Property-Based Stock Correctness Tests | Test-scoped jqwik 1.9.0; five properties with 1,000 generated examples each cover exact decrement, non-negative stock, insufficient-stock non-mutation, exact depletion, repeated operations, boundaries, and overflow-safe input ranges |
 | ✔ ADR-020 Pre-Warm Architecture (Revision 2) | Six architecture-review findings adjudicated and resolved; governing architecture approved; no production or test code changed |
 | ✔ Pre-Warm Use Case (SESSION-009, committed `7b68f14`) | `PreWarmStockUseCase`, `StockPreWarmPort`, `RedisStockPreWarmAdapter`, `StockPreWarmLuaExecutor`, revision-fenced `stock-prewarm.lua`; `InventoryConfiguration` (`Clock` bean); `PreWarmStockResult` enum; 32 tests (+4 classes); reviewed and approved; committed |
+| ✔ Reservation Domain Aggregate (SESSION-011, committed `713d2d2`) | `Reservation` aggregate root (sealed `Status`, `create`/`reconstitute`, `confirm`/`expire`/`release`); `ReservationId`, `UserId`, `OrderId`, `Quantity`, `ReservationExpiry` value objects; `ReservationTest` (29 cases), `ReservationValueObjectTest` (18 cases); 47 new tests; reviewed and approved; committed |
 
 ---
 
 ## Verification
 
 ```text
-./gradlew :services:inventory-service:test
-BUILD SUCCESSFUL in 23s
-163 tests passed, 0 failed, 0 errors, 0 skipped
-
-./gradlew build
-BUILD SUCCESSFUL in 23s
-Inventory: 163 passed; SaleService: 16 passed; 0 failed/errors/skipped
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+BUILD SUCCESSFUL in 47s
+210 tests passed, 0 failed, 0 errors, 0 skipped
 ```
 
-Inventory verification comprises 135 unit/property tests and 28 real
+Inventory verification comprises 182 unit/property tests and 28 real
 PostgreSQL/Redis Testcontainers tests. jqwik is present only on the Inventory
 test runtime classpath and is absent from its production runtime classpath.
 
@@ -63,8 +60,9 @@ test runtime classpath and is absent from its production runtime classpath.
 ## Database
 
 `inventory_db` contains only `products` and Product-owned `stock_levels`.
-`(product_id, sale_id)` is unique. No Reservation, release, reconciliation,
-audit, outbox, Kafka, or Week 4 table exists.
+`(product_id, sale_id)` is unique. The Reservation domain aggregate exists in
+the domain layer only; no `reservations` table or Flyway migration has been
+added yet. No release, reconciliation, audit, outbox, or Kafka table exists.
 
 ---
 
@@ -94,7 +92,8 @@ audit, outbox, Kafka, or Week 4 table exists.
   authoritative state without changing the stock key's expiry.
 - Missing stock remains missing; revisionless stock is atomically invalidated.
 - Synchronization failure is warned and cannot conceal the committed result.
-- No Kafka, Inventory REST API, Reservation, release, or reconciliation is in scope.
+- The Reservation domain aggregate is implemented (domain layer only).
+- Reservation persistence, REST API, Redis duplicate guard, expiry sweep, and Kafka events are not yet in scope.
 
 ---
 
@@ -135,20 +134,24 @@ audit, outbox, Kafka, or Week 4 table exists.
 - A committed response lost before the client receives it can be retried and
   decrement again; cross-request idempotency remains out of scope.
 - The SaleService migration defect remains outside this slice.
-- `PROJECT_TRUTH.md` and `REPOSITORY_INDEX.md` remain stale.
-
----
-
-## Remaining Week 3 Work
-
-- ✔ Pre-warm Architecture — ADR-020 Revision 2 approved (design complete)
-- ✔ Pre-warm Use Case implementation — committed at `7b68f14`
-- ✔ Commit pre-warm implementation — done at `7b68f14`
-- ✔ Regression maintenance — 163-test baseline maintained
-- ✔ Documentation reconciliation — completed in SESSION-010
-
 ---
 
 ## Week 3 Status
 
 Week 3 is **COMPLETE**. All implementation slices committed and pushed to `origin/main`. Documentation reconciled in SESSION-010.
+
+---
+
+## Week 4 Status
+
+Week 4 is **IN PROGRESS**. Slice 1 (Reservation domain aggregate) committed at `713d2d2` and documentation reconciled in SESSION-011.
+
+Remaining slices:
+- Reservation persistence (JPA entity, mapper, V2 Flyway migration for `reservations` + `stock_reservation_log`)
+- REST `POST /api/v1/reservations` controller
+- Redis `resv:lock:{userId}:{saleId}` NX duplicate guard
+- `stock_release.lua` integration and `StockReleasePort`
+- Expiry sweep `@Scheduled`
+- `StockReserved` / `ReservationExpired` Kafka events
+- 1500-concurrent integration test (1000-unit sale)
+- `ReservationCommandService` application service

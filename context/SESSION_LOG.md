@@ -2499,4 +2499,110 @@ passes with `BUILD SUCCESSFUL`, 163 tests, 0 failed, 0 errors, 0 skipped.
 | Pre-warm use case (ADR-020 Revision 2) | `7b68f14` |
 | Documentation reconciliation | SESSION-010 (no code commit) |
 
+---
+
+## SESSION-011
+**Date:** 2026-08-06
+**Milestone:** Week 4 — Reservation Domain Aggregate (Slice 1)
+**Outcome:** COMPLETE
+**Engineer:** Tarun K Y
+**Branch:** `main`
+**Implementation commit:** `713d2d2` (`feat(inventory): implement reservation domain aggregate`)
+**Documentation commit:** pending (this reconciliation session)
+
+---
+
+### Objective
+
+Implement the Reservation domain aggregate as Week 4, Slice 1, then reconcile
+all context documents to reflect the completed slice. No persistence, REST,
+Redis, Kafka, or scheduler work was included in this slice.
+
+---
+
+### Implementation contract
+
+The approved Implementation Contract was produced in the same session. It was
+reviewed twice (initial review + adversarial review post-implementation). Both
+reviews returned 0 VALID, 0 PARTIALLY VALID findings. Contract approved.
+
+---
+
+### New production files (commit `713d2d2`)
+
+| File | Responsibility |
+|---|---|
+| `domain/aggregate/Reservation.java` | Aggregate root: nested sealed `Status` (Pending/Confirmed/Expired/Released), `create`/`reconstitute` factories, `confirm`/`expire`/`release` commands, in-place mutation with `Math.incrementExact` |
+| `domain/vo/ReservationId.java` | UUID-backed typed identity with `generate()` |
+| `domain/vo/UserId.java` | Opaque UUID reference (no `generate()`; userId comes from external services) |
+| `domain/vo/OrderId.java` | Opaque UUID reference (no `generate()`; orderId comes from OrderService) |
+| `domain/vo/Quantity.java` | Strictly positive (≥1) reservation quantity |
+| `domain/vo/ReservationExpiry.java` | Expiry instant with `in()` factory, `isExpired()`, `remainingTtl()` |
+
+---
+
+### New test files (commit `713d2d2`)
+
+| Test class | Tests | Coverage |
+|---|---:|---|
+| `ReservationValueObjectTest` | 18 | ReservationId (4), UserId (3), OrderId (3), Quantity (3), ReservationExpiry (5) |
+| `ReservationTest` | 29 | create (7), confirm (5), expire (4), release (5), version isolation (2), reconstitute (3) |
+| **Added** | **47** | |
+
+---
+
+### Adversarial review
+
+All 4 findings classified INVALID:
+- F-1: Missing `isValid()` on `ReservationExpiry` — not required by contract; YAGNI.
+- F-2: Nested sealed `Status` vs. top-level — permitted; contract cited §10 pattern only.
+- F-3: Null expiry caught by dereference — effective; no explicit `requireNonNull` required by contract.
+- F-4: `release(reason)` discards reason — correct; reason is not an aggregate field per DomainModel.md.
+
+---
+
+### Verification
+
+```bash
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+BUILD SUCCESSFUL in 47s
+210 tests passed, 0 failed, 0 errors, 0 skipped
+```
+
+| Inventory test category | Classes | Tests |
+|---|---:|---:|
+| Unit / property | 25 | 182 |
+| PostgreSQL/Redis Testcontainers integration | 4 | 28 |
+| **Total** | **29** | **210** |
+
+No existing files were modified. Scope check: only the 8 listed files created.
+
+---
+
+### Documentation reconciliation (this session)
+
+| File | Change |
+|---|---|
+| `HANDOFF.md` | Milestone → Week 4; latest commit → `713d2d2`; removed "No Reservation/Week 4 model exists"; updated current-state paragraph (50 files, 28 classes, 210 tests); added Reservation domain files to Modified Files; updated build section; added Week 4 Completed Slices table |
+| `context/CURRENT_STATE.md` | Status → IN PROGRESS; latest commit → `713d2d2`; updated file/class/test counts; added Reservation Domain Aggregate row to Completed Work; updated Database section; updated Architecture Locked section; added Week 4 Status block |
+| `context/REPOSITORY_INDEX.md` | Updated status line and commit; `domain.aggregate` 1→2; `domain.vo` 4→9; `domain.*` test classes 5→7 |
+| `context/PROJECT_TRUTH.md` | InventoryService service table row updated (IN PROGRESS, 50 files, 210 tests, `713d2d2`); Domain Model status note updated |
+| `context/SESSION_LOG.md` | This SESSION-011 append |
+
+---
+
+### Week 4 slice status
+
+| Slice | Status |
+|---|---|
+| Slice 1: Reservation domain aggregate | ✔ DONE — `713d2d2` |
+| Slice 2: Reservation persistence | NOT STARTED |
+| Slice 3: REST `POST /api/v1/reservations` | NOT STARTED |
+| Slice 4: Redis duplicate guard | NOT STARTED |
+| Slice 5: `stock_release.lua` integration | NOT STARTED |
+| Slice 6: Expiry sweep `@Scheduled` | NOT STARTED |
+| Slice 7: Kafka events | NOT STARTED |
+| Slice 8: 1500-concurrent integration test | NOT STARTED |
+| Slice 9: `ReservationCommandService` | NOT STARTED |
+
 Week 3: **COMPLETE**.

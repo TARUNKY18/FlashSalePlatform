@@ -143,7 +143,7 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 | Service | Owns | DB / Schema | Kafka Role | Redis Role | Port | Code Status |
 |---|---|---|---|---|---|---|
 | SaleService | Sale lifecycle, scheduling, status machine | `sales_db` | Producer: `sale-events` | Cache: active sale metadata | 8081 | COMPLETE — Week 2; FlashSale aggregate, REST API, Flyway V1, 16 tests |
-| InventoryService | Stock levels, atomic decrement, pre-warm | `inventory_db` | Producer: `inventory-events` | Layer 1: stock counter (Lua DECR), pre-warm | 8082 | COMPLETE — Week 3; 44 production files, 163 tests, commit `7b68f14` |
+| InventoryService | Stock levels, atomic decrement, pre-warm, reservations | `inventory_db` | Producer: `inventory-events` | Layer 1: stock counter (Lua DECR), pre-warm | 8082 | IN PROGRESS — Week 4 Slice 1 complete; 50 production files, 210 tests, commit `713d2d2` |
 | OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PLANNED — zero code written |
 | NotificationService | Email, push, SMS fan-out | None (stateless) | Consumer: all three topics | None | 8084 | PLANNED — zero code written |
 | AnalyticsService | Event ingestion, metrics, dashboards | ClickHouse | Consumer: all three topics | None | 8085 | PLANNED — zero code written |
@@ -165,7 +165,7 @@ HPA trigger: CPU utilisation > 70%.
 
 ## Domain Model
 
-**Status: PLANNED — fully designed, zero implementation.**
+**Status: Reservation domain aggregate implemented in InventoryService (Week 4 Slice 1). All other aggregates remain planned.**
 
 **Aggregate roots (4):**
 | Aggregate | Owning service / schema | Core invariant | State machine |

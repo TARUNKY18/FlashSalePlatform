@@ -2,20 +2,22 @@
 
 **Handoff date:** 2026-08-06
 
-**Current milestone:** Week 3 — InventoryService
+**Current milestone:** Week 4 — Reservation (in progress)
 
 **Week 3 status:** COMPLETE — all implementation slices committed; documentation reconciled
 
+**Week 4, Slice 1 status:** COMPLETE — Reservation domain aggregate committed; documentation reconciled
+
 **Branch:** `main`
 
-**Latest commit:** `7b68f14` (`implemented redis-pre-warm`), pushed to `origin/main`
+**Latest commit:** `713d2d2` (`feat(inventory): implement reservation domain aggregate`), pushed to `origin/main`
 
 **Working tree:** clean
 
-**Audience:** The senior engineer or Codex session continuing Week 3 development
+**Audience:** The senior engineer or Codex session continuing Week 4 development
 
-Week 3 is complete. All implementation slices are committed and pushed. Documentation
-was reconciled in SESSION-010. This handoff reflects the final Week 3 state.
+Week 3 is complete. Week 4, Slice 1 (Reservation domain aggregate) is complete. Documentation
+was reconciled in SESSION-011. This handoff reflects the post-Slice-1 Week 4 state.
 
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
@@ -70,7 +72,9 @@ infrastructure adapters + Spring/JPA/Redis
 - `infra.config` owns infrastructure bean construction.
 - No Inventory REST/API layer exists.
 - No Kafka integration exists.
-- No Reservation/Week 4 model exists.
+- The `Reservation` aggregate root (domain layer only) was introduced in Week 4, Slice 1.
+  Reservation persistence, REST, Redis duplicate guard, expiry sweep, and Kafka events
+  remain unimplemented.
 
 The current decrement path is:
 
@@ -196,16 +200,17 @@ these approved implementation commits:
 | `10069d8` | Safe Redis re-warming after successful PostgreSQL fallback |
 | `bca1ff1` | PostgreSQL durable authority, revision-fenced Redis projection, and real infrastructure correctness tests |
 | `f12d67d` | jqwik property-based stock correctness tests |
+| `7b68f14` | Pre-warm use case (ADR-020 Revision 2) |
+| `713d2d2` | Reservation domain aggregate (Week 4, Slice 1) |
 
-InventoryService currently contains (working tree — pre-warm implementation not yet committed):
+InventoryService currently contains:
 
-- 37 production Java files (+7 untracked pre-warm files).
-- 22 runnable test classes (+4 untracked pre-warm test classes).
-- 163 passing Inventory tests: 135 unit/property and 28 real Testcontainers tests.
-- Three Lua scripts: `stock-decrement.lua`, `stock-projection-sync.lua`, and
-  `stock-prewarm.lua` (modified/untracked).
+- 50 production Java files.
+- 28 runnable test classes.
+- 210 passing Inventory tests: 182 unit/property and 28 real Testcontainers tests.
+- Three Lua scripts: `stock-decrement.lua`, `stock-projection-sync.lua`, and `stock-prewarm.lua` (integrated).
 - Two Flyway-managed tables: `products` and `stock_levels`.
-- No REST endpoints, Kafka code, Reservation work, release integration, or
+- No REST endpoints, Kafka code, Reservation persistence, release integration, or
   reconciliation integration.
 
 ## ✔ Skeleton
@@ -897,6 +902,19 @@ implementation slices, the session log updates, and this handoff.
 | `services/inventory-service/src/test/java/com/flashsale/inventory/domain/vo/StockCountTest.java` | StockCount behavior unit tests. |
 | `services/inventory-service/src/test/java/com/flashsale/inventory/domain/vo/TypedIdTest.java` | Typed identity unit tests. |
 
+## New Reservation domain files (Week 4, Slice 1 — commit `713d2d2`)
+
+| File | Why it exists |
+|---|---|
+| `services/inventory-service/src/main/java/com/flashsale/inventory/domain/aggregate/Reservation.java` | Reservation aggregate root: sealed Status (Pending/Confirmed/Expired/Released), create/reconstitute factories, confirm/expire/release commands, in-place mutation. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/domain/vo/ReservationId.java` | UUID-backed Reservation identity with generate(). |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/domain/vo/UserId.java` | Opaque UUID reference to a user (no generate(); comes from an external service). |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/domain/vo/OrderId.java` | Opaque UUID reference to an order (no generate(); comes from OrderService). |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/domain/vo/Quantity.java` | Strictly positive (≥1) reservation quantity. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/domain/vo/ReservationExpiry.java` | Expiry instant with in() factory, isExpired(), and remainingTtl(). |
+| `services/inventory-service/src/test/java/com/flashsale/inventory/domain/vo/ReservationValueObjectTest.java` | All 5 new value-object types tested (18 cases). |
+| `services/inventory-service/src/test/java/com/flashsale/inventory/domain/aggregate/ReservationTest.java` | All commands, invariants, and reconstitute tested (29 cases). |
+
 ## New persistence and migration files
 
 | File | Why it exists |
@@ -1374,24 +1392,21 @@ is commit `f12d67d`, already pushed to `origin/main`.
 ## Latest successful build
 
 ```text
-Command: ./gradlew :services:inventory-service:test && ./gradlew build
-Result:  BUILD SUCCESSFUL (SESSION-009, working tree, pre-warm uncommitted)
-Time:    23 seconds
-Tests:   Inventory 163; Sale 16; 0 failed, 0 errors, 0 skipped
+Command: ./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+Result:  BUILD SUCCESSFUL (SESSION-011, commit 713d2d2)
+Time:    47 seconds
+Tests:   Inventory 210; Sale 16; 0 failed, 0 errors, 0 skipped
 ```
 
 ## Passing test inventory
 
 | Inventory test category | Runnable classes | Passing tests |
 |---|---:|---:|
-| Unit/property | 19 | 135 |
+| Unit/property | 25 | 182 |
 | PostgreSQL/Redis Testcontainers integration | 4 | 28 |
-| **Inventory total** | **23** | **163** |
+| **Inventory total** | **29** | **210** |
 
 The complete repository build also runs 16 passing SaleService tests.
-
-> **Note:** 4 new test classes and modified `RedisScriptConfigurationTest` are
-> untracked/modified. Counts reflect the current working-tree build.
 
 Non-failing warnings observed:
 
@@ -1434,8 +1449,23 @@ All Week 3 tasks are complete.
 | Regression maintenance (163 tests) | ✔ DONE | maintained through all slices |
 | Documentation reconciliation | ✔ DONE | SESSION-010 |
 
-Kafka integration, Inventory GET endpoints, Reservation/Week 4 work, release,
-and reconciliation are not Week 3 tasks and were not introduced.
+Kafka integration, Inventory GET endpoints, release, and reconciliation are not
+Week 3 tasks and were not introduced.
+
+---
+
+# Week 4 Completed Slices
+
+| Slice | Status | Commit / Session |
+|---|---|---|
+| Slice 1: Reservation domain aggregate | ✔ DONE | `713d2d2` |
+| Documentation reconciliation (Slice 1) | ✔ DONE | SESSION-011 |
+
+Remaining Week 4 slices (not yet started): Reservation persistence (JPA entity,
+mapper, V2 Flyway migration), REST `POST /api/v1/reservations`, Redis
+`resv:lock:{userId}:{saleId}` duplicate guard, `stock_release.lua` integration,
+expiry sweep `@Scheduled`, `StockReserved`/`ReservationExpired` Kafka events,
+1500-concurrent integration test, `ReservationCommandService`.
 
 ---
 
@@ -1477,8 +1507,8 @@ and reconciliation are not Week 3 tasks and were not introduced.
     creation and TTL initialization under a separately approved contract.
 22. Do not modify SaleService unless the approved slice makes it strictly
     necessary.
-23. Do not add Kafka, REST endpoints, DTOs, Reservation/Week 4 work, release,
-    or reconciliation under the current Week 3 scope.
+23. Do not add Kafka, REST endpoints, DTOs, Reservation persistence/REST/events,
+    release, or reconciliation outside the current approved slice scope.
 24. Add focused tests for the slice being implemented.
 25. Run at least:
 

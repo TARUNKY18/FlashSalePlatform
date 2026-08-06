@@ -160,8 +160,8 @@ downloaded, but whether they were committed to the repository is unknown.
 
 ### `services/inventory-service/` — **Existing**
 
-**Status:** Complete (Week 3). 44 production Java files; 26 test classes; 163 passing tests.
-**Latest commit:** `7b68f14` (`implemented redis-pre-warm`)
+**Status:** In progress (Week 4, Slice 1 complete). 50 production Java files; 28 test classes; 210 passing tests.
+**Latest commit:** `713d2d2` (`feat(inventory): implement reservation domain aggregate`)
 
 #### Production packages
 
@@ -170,9 +170,9 @@ downloaded, but whether they were committed to the repository is unknown.
 | `com.flashsale.inventory` | 1 | Spring Boot entry point |
 | `com.flashsale.inventory.application` | 6 | Use cases and result types (`StockCounterService`, `PreWarmStockUseCase`, `StockDecrementResult`, `DurableStockDecrementResult`, `StockProjectionSyncResult`, `PreWarmStockResult`) |
 | `com.flashsale.inventory.application.port` | 8 | Outbound ports and unavailable exceptions |
-| `com.flashsale.inventory.domain.aggregate` | 1 | `Product` aggregate root |
+| `com.flashsale.inventory.domain.aggregate` | 2 | `Product`, `Reservation` aggregate roots |
 | `com.flashsale.inventory.domain.entity` | 1 | `StockLevel` entity |
-| `com.flashsale.inventory.domain.vo` | 4 | `StockCount`, `ProductId`, `SaleId`, `StockLevelId` |
+| `com.flashsale.inventory.domain.vo` | 9 | `StockCount`, `ProductId`, `SaleId`, `StockLevelId`, `ReservationId`, `UserId`, `OrderId`, `Quantity`, `ReservationExpiry` |
 | `com.flashsale.inventory.infra.config` | 2 | `RedisScriptConfiguration`, `InventoryConfiguration` (Clock bean) |
 | `com.flashsale.inventory.infra.persistence` | 7 | JPA entities, mapper, Spring Data repository, adapters |
 | `com.flashsale.inventory.infra.redis` | 6 | Lua executors and Redis adapters |
@@ -182,7 +182,7 @@ downloaded, but whether they were committed to the repository is unknown.
 | Package | Classes | Tests |
 |---|---|---|
 | `com.flashsale.inventory.application` | 2 | unit |
-| `com.flashsale.inventory.domain.*` | 5 | unit + property-based (jqwik) |
+| `com.flashsale.inventory.domain.*` | 7 | unit + property-based (jqwik) |
 | `com.flashsale.inventory.infra.*` | 14 | unit |
 | `com.flashsale.inventory.integration` | 5 | Testcontainers (PostgreSQL 16 + Redis 7.2) |
 
