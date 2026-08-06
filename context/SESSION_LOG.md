@@ -2042,3 +2042,126 @@ Additional verification:
 
 Week 3 remains in progress. Kafka, Inventory REST, Reservation/Week 4,
 cross-request idempotency, retries, release, and reconciliation remain excluded.
+
+---
+
+## SESSION-007
+
+**Date:** 2026-08-05
+**Milestone:** Week 3 — Property-Based Stock Correctness Tests
+**Outcome:** COMPLETE
+**Engineer:** Tarun K Y
+**Branch:** `main`
+**Implementation commit:** `f12d67d7d7021e6620a6d35592c2e0ec0d5953b9`
+**Commit status:** Pushed; local `main`, `HEAD`, and `origin/main` identify the
+same implementation commit.
+
+---
+
+### 1. Implemented Scope
+
+The independent Property-Based Stock Correctness Tests slice is complete.
+jqwik 1.9.0 was added to InventoryService in test scope only, and a new domain
+property-test class exercises the existing Product-owned StockLevel decrement
+behavior without changing production code, orchestration, transaction
+boundaries, PostgreSQL durable authority, or Redis revision fencing.
+
+The new suite contains five properties with 1,000 generated examples each:
+
+1. Successful positive decrements reduce stock by exactly the requested
+   quantity and never produce negative stock.
+2. Requests greater than available stock return insufficient stock and leave
+   the counter unchanged.
+3. A request equal to available stock depletes the counter exactly to zero.
+4. Repeated generated operations match an independent arithmetic state model.
+5. After exact depletion, subsequent positive requests remain insufficient and
+   leave stock at zero.
+
+Generators include zero, one, exact-depletion values, insufficient requests,
+repeated sequences, and values near `Integer.MAX_VALUE`. Bounds and oracle
+arithmetic avoid integer overflow.
+
+---
+
+### 2. Implementation Files Changed
+
+- `services/inventory-service/build.gradle`
+  - Added `net.jqwik:jqwik:1.9.0` as `testImplementation` only.
+- `services/inventory-service/src/test/java/com/flashsale/inventory/domain/aggregate/ProductStockCorrectnessPropertyTest.java`
+  - Added the five jqwik properties and their generators/model oracle.
+
+No production file and no pre-existing test file changed in the implementation
+slice.
+
+---
+
+### 3. Verification Results
+
+Focused property suite:
+
+```bash
+./gradlew :services:inventory-service:test \
+  --tests 'com.flashsale.inventory.domain.aggregate.ProductStockCorrectnessPropertyTest'
+```
+
+Result: `BUILD SUCCESSFUL` in 23 seconds. Five properties and 5,000 generated
+examples passed.
+
+InventoryService clean build:
+
+```bash
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+```
+
+Result: `BUILD SUCCESSFUL` in 30 seconds. All 131 Inventory tests passed with
+zero failures, errors, or skips.
+
+Whole-repository build:
+
+```bash
+./gradlew clean build
+```
+
+Result: `BUILD SUCCESSFUL` in 59 seconds. InventoryService passed 131 tests and
+SaleService passed 16 tests, with zero failures, errors, or skips.
+
+The Inventory total comprises 110 unit/property tests and 21 real
+PostgreSQL/Redis Testcontainers tests across 18 runnable test classes.
+
+Additional verification:
+
+- jqwik is present on Inventory's test runtime classpath only and absent from
+  its production runtime classpath.
+- `git diff --check` passed.
+- The production-code diff was empty.
+- The tracked diff for all pre-existing tests was empty.
+- The transient jqwik database file was absent from the committed tree.
+- Independent implementation review concluded `APPROVED`.
+
+The first sandboxed Gradle attempt could not acquire the user Gradle cache lock;
+the identical verification was rerun with approved cache access and succeeded.
+
+---
+
+### 4. Build and Commit Status
+
+The focused test, Inventory clean build, and complete repository build are all
+successful. Implementation commit `f12d67d` is already pushed to `origin/main`.
+
+---
+
+### 5. Remaining Week 3 Work
+
+1. Approve and implement the pre-warm use case, including the trigger/source,
+   sale-timing contract, TTL ownership, and revision initialization compatible
+   with the active Redis projection fence.
+2. Preserve the 131-test regression baseline through any subsequently approved
+   Week 3 slice.
+3. Reconcile `context/PROJECT_TRUTH.md`, `context/REPOSITORY_INDEX.md`, and the
+   obsolete Build Plan and Database Schema statements with current repository
+   reality.
+
+Property-based stock correctness testing is complete and is not remaining
+scope. Kafka, Inventory REST, Reservation/Week 4, cross-service integration,
+performance optimization, refactoring, retries, release, and reconciliation
+implementation remain out of scope.

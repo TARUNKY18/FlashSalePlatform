@@ -1,6 +1,6 @@
 # Flash Sale Platform — Engineering Handoff
 
-**Handoff date:** 2026-08-04
+**Handoff date:** 2026-08-05
 
 **Current milestone:** Week 3 — InventoryService
 
@@ -8,21 +8,21 @@
 
 **Branch:** `main`
 
-**Implementation HEAD:** `bca1ff1` (`Week 3 implementation`)
+**Implementation HEAD:** `f12d67d` (`feat(inventory): add jqwik property-based stock correctness tests`), pushed to `origin/main`
 
 **Audience:** The senior engineer or Codex session continuing Week 3 development
 
 This is the entry document for the next development session. It records the
-approved repository state through the durable-authority correctness gate. The
-Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
+approved repository state through the Property-Based Stock Correctness Tests
+slice. The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
-Week 3 remains incomplete because pre-warm, property-based testing, and final
-documentation reconciliation remain unfinished.
+Week 3 remains incomplete because pre-warm and final documentation
+reconciliation remain unfinished.
 
 > **Documentation drift warning:** `context/PROJECT_TRUTH.md` and
 > `context/REPOSITORY_INDEX.md` still contain stale implementation status.
 > Until they are reconciled, current source code, this handoff,
-> `context/CURRENT_STATE.md`, and `SESSION-003` through `SESSION-006` in
+> `context/CURRENT_STATE.md`, and `SESSION-003` through `SESSION-007` in
 > `context/SESSION_LOG.md` are the verified implementation evidence. Do not copy
 > stale planned fields or structures into code.
 
@@ -116,6 +116,7 @@ failure warns but never conceals the committed result.
 | Cache/counter store | Redis Cluster through Spring Data Redis |
 | Concurrency model | Java 21 virtual threads enabled |
 | Unit testing | JUnit Jupiter, AssertJ/JUnit assertions, Mockito |
+| Property testing | jqwik 1.9.0, Inventory test scope only |
 | Integration testing | Testcontainers with real PostgreSQL 16 and Redis 7.2 |
 | Packaging | Spring Boot executable JAR |
 
@@ -152,12 +153,12 @@ documents in this order:
    its implementation-status sections are stale and must not override current
    source evidence.
 3. `context/CURRENT_STATE.md` — current operational/milestone snapshot through
-   the durable-authority correctness gate.
+   the Property-Based Stock Correctness Tests slice.
 4. `docs/architecture/Build-Plan.md` — milestone intent and sequencing; treat
    unapproved legacy details as plans, not implementation requirements.
-5. `context/SESSION_LOG.md` — read `SESSION-003` through `SESSION-006` for the
+5. `context/SESSION_LOG.md` — read `SESSION-003` through `SESSION-007` for the
    exhaustive implementation, historical fallback/re-warming, durable-authority
-   verification, and decision records.
+   verification, property-based correctness verification, and decision records.
 6. `context/CONFLICTS.md` — check unresolved documentation conflicts before
    acting on contradictory specifications.
 7. `context/REPOSITORY_INDEX.md` — repository structure reference; verify it
@@ -191,12 +192,13 @@ these approved implementation commits:
 | `9bb3ad7` | Product-owned, transactionally locked PostgreSQL fallback |
 | `10069d8` | Safe Redis re-warming after successful PostgreSQL fallback |
 | `bca1ff1` | PostgreSQL durable authority, revision-fenced Redis projection, and real infrastructure correctness tests |
+| `f12d67d` | jqwik property-based stock correctness tests |
 
 InventoryService currently contains:
 
 - 30 production Java files.
-- 17 runnable test classes.
-- 126 passing Inventory tests: 105 unit and 21 real Testcontainers tests.
+- 18 runnable test classes.
+- 131 passing Inventory tests: 110 unit/property and 21 real Testcontainers tests.
 - Two integrated Lua scripts: `stock-decrement.lua` and
   `stock-projection-sync.lua`.
 - Two Flyway-managed tables: `products` and `stock_levels`.
@@ -855,7 +857,7 @@ ports introduced during this session.
 
 # Modified Files
 
-This section lists every file created or changed by the nine approved
+This section lists every file created or changed by the completed approved
 implementation slices, the session log updates, and this handoff.
 
 ## Existing repository files changed
@@ -864,15 +866,15 @@ implementation slices, the session log updates, and this handoff.
 |---|---|
 | `settings.gradle` | Added `include 'services:inventory-service'` to the multi-module build. |
 | `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/ProductRepository.java` | Initially added as the JPA aggregate adapter; later updated only to implement the application ProductRepository port and add `@Override` markers. |
-| `context/SESSION_LOG.md` | Appended `SESSION-003` through `SESSION-006`; previous history was preserved. |
-| `context/CURRENT_STATE.md` | Updated the verified milestone snapshot through the durable-authority correctness gate. |
-| `HANDOFF.md` | Updated this production handoff through the durable-authority correctness gate. |
+| `context/SESSION_LOG.md` | Appended `SESSION-003` through `SESSION-007`; previous history was preserved. |
+| `context/CURRENT_STATE.md` | Updated the verified milestone snapshot through the Property-Based Stock Correctness Tests slice. |
+| `HANDOFF.md` | Updated this production handoff through the Property-Based Stock Correctness Tests slice. |
 
 ## New skeleton/configuration files
 
 | File | Why it exists |
 |---|---|
-| `services/inventory-service/build.gradle` | Defines the InventoryService Spring Boot module and its dependencies. |
+| `services/inventory-service/build.gradle` | Defines the InventoryService Spring Boot module and its dependencies, including jqwik 1.9.0 in test scope only. |
 | `services/inventory-service/src/main/java/com/flashsale/inventory/InventoryServiceApplication.java` | InventoryService Spring Boot entry point. |
 | `services/inventory-service/src/main/resources/application.yml` | Service port, virtual threads, PostgreSQL, JPA, Flyway, Redis Cluster, and Actuator configuration. |
 
@@ -887,6 +889,7 @@ implementation slices, the session log updates, and this handoff.
 | `services/inventory-service/src/main/java/com/flashsale/inventory/domain/vo/StockCount.java` | Non-negative stock value and checked arithmetic. |
 | `services/inventory-service/src/main/java/com/flashsale/inventory/domain/vo/StockLevelId.java` | Typed StockLevel UUID. |
 | `services/inventory-service/src/test/java/com/flashsale/inventory/domain/aggregate/ProductTest.java` | Product invariant unit tests. |
+| `services/inventory-service/src/test/java/com/flashsale/inventory/domain/aggregate/ProductStockCorrectnessPropertyTest.java` | Five jqwik properties covering exact decrement, non-negative stock, insufficient-stock non-mutation, exact depletion, repeated operations, boundaries, and overflow-safe generated quantities. |
 | `services/inventory-service/src/test/java/com/flashsale/inventory/domain/entity/StockLevelTest.java` | StockLevel invariant unit tests. |
 | `services/inventory-service/src/test/java/com/flashsale/inventory/domain/vo/StockCountTest.java` | StockCount behavior unit tests. |
 | `services/inventory-service/src/test/java/com/flashsale/inventory/domain/vo/TypedIdTest.java` | Typed identity unit tests. |
@@ -1328,22 +1331,59 @@ skips. Domain framework-import, application dependency-direction, prohibited
 scope, legacy bridge/fallback/re-warm, and unintegrated capability scans were
 clean at implementation commit `bca1ff1`.
 
+### Property-Based Stock Correctness Tests
+
+Focused property verification:
+
+```bash
+./gradlew :services:inventory-service:test \
+  --tests 'com.flashsale.inventory.domain.aggregate.ProductStockCorrectnessPropertyTest'
+```
+
+Result: `BUILD SUCCESSFUL` in 23 seconds. Five jqwik properties ran 1,000
+generated examples each, for 5,000 passing generated checks. They verify exact
+successful decrement, non-negative stock, insufficient-stock non-mutation,
+exact depletion, repeated-operation arithmetic, boundary values, and
+overflow-safe generated quantities.
+
+Inventory verification:
+
+```bash
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+```
+
+Result: `BUILD SUCCESSFUL` in 30 seconds; 131 tests passed with zero failures,
+errors, or skips.
+
+Complete repository verification:
+
+```bash
+./gradlew clean build
+```
+
+Result: `BUILD SUCCESSFUL` in 59 seconds. InventoryService passed all 131 tests
+and SaleService passed all 16 tests, with zero failures, errors, or skips.
+Dependency inspection confirmed jqwik on Inventory's test runtime classpath
+only and absent from its production runtime classpath. `git diff --check`, the
+production-code diff check, and the existing-test diff check passed. The slice
+is commit `f12d67d`, already pushed to `origin/main`.
+
 ## Latest successful build
 
 ```text
 Command: ./gradlew clean build
 Result:  BUILD SUCCESSFUL
-Time:    1 minute 6 seconds
-Tests:   Inventory 126; Sale 16; 0 failed, 0 errors, 0 skipped
+Time:    59 seconds
+Tests:   Inventory 131; Sale 16; 0 failed, 0 errors, 0 skipped
 ```
 
 ## Passing test inventory
 
 | Inventory test category | Runnable classes | Passing tests |
 |---|---:|---:|
-| Unit | 14 | 105 |
+| Unit/property | 15 | 110 |
 | PostgreSQL/Redis Testcontainers integration | 3 | 21 |
-| **Inventory total** | **17** | **126** |
+| **Inventory total** | **18** | **131** |
 
 The complete repository build also runs 16 passing SaleService tests.
 
@@ -1394,31 +1434,22 @@ Only unfinished work appears in this section.
 - Preserve same-slot keys and the approved TTL rule once sale-end ownership is
   defined.
 
-## 2. Property-based tests
+## 2. Regression maintenance
 
-- Add jqwik or the approved property-testing mechanism.
-- Prove across generated quantities and starting stock that stock never becomes
-  negative.
-- Prove successful decrements reduce stock by exactly the requested positive
-  quantity.
-- Prove insufficient stock never changes the counter.
-- Cover boundary values, integer limits, and repeated operations.
-
-## 3. Regression maintenance
-
-- Retain all 126 Inventory tests unless an approved contract intentionally
+- Retain all 131 Inventory tests unless an approved contract intentionally
   evolves.
 - Extend the real-infrastructure suites alongside any pre-warm change so
   revision fencing, TTL preservation, and zero-oversell behavior remain
   protected.
 - Run the full Inventory module build after every slice.
 
-## 4. Week 3 documentation reconciliation
+## 3. Week 3 documentation reconciliation
 
 - Update `context/PROJECT_TRUTH.md` to current repository reality.
 - Record which legacy Build Plan and Database Schema statements are obsolete.
 - Update `context/REPOSITORY_INDEX.md` for InventoryService files/directories.
-- Mark Week 3 complete only after the pre-warm and property-based slices pass.
+- Mark Week 3 complete only after the pre-warm slice passes and the working and
+  canonical documentation are reconciled.
 
 Kafka integration, Inventory GET endpoints, Reservation/Week 4 work, release,
 and reconciliation are not remaining Week 3 tasks and must not be introduced.
