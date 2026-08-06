@@ -4,23 +4,18 @@
 
 **Current milestone:** Week 3 — InventoryService
 
-**Week 3 status:** In progress — pre-warm use case implementation complete, pending commit
+**Week 3 status:** COMPLETE — all implementation slices committed; documentation reconciled
 
 **Branch:** `main`
 
-**Latest commit:** `84d68ab` (`docs: synchronize project state after ADR-020 Revision 2`), pushed to `origin/main`
+**Latest commit:** `7b68f14` (`implemented redis-pre-warm`), pushed to `origin/main`
 
-**Implementation HEAD:** `f12d67d` (`feat(inventory): add jqwik property-based stock correctness tests`), pushed to `origin/main`
-
-**Working tree:** Pre-warm use case implementation present as untracked/modified files.
-`BUILD SUCCESSFUL`, 163 Inventory tests passing. No commit made in SESSION-009.
+**Working tree:** clean
 
 **Audience:** The senior engineer or Codex session continuing Week 3 development
 
-This is the entry document for the next development session. The pre-warm use case
-implementation (SESSION-009) is complete and reviewed (`IMPLEMENTATION APPROVED`),
-but **not yet committed**. The first task for the next session is to commit all
-pre-warm working-tree files, then complete documentation reconciliation.
+Week 3 is complete. All implementation slices are committed and pushed. Documentation
+was reconciled in SESSION-010. This handoff reflects the final Week 3 state.
 
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
@@ -1429,72 +1424,18 @@ Non-failing warnings observed:
 
 ---
 
-# Remaining Week 3 Tasks
+# Week 3 Completed Tasks
 
-Only unfinished work appears in this section.
+All Week 3 tasks are complete.
 
-## 1. Commit the pre-warm implementation ← START HERE
-
-The pre-warm use case implementation (SESSION-009) is **complete and approved**
-but not yet committed. The working tree contains 12 untracked files and 3
-modified files. All files are reviewed, build-verified (163 tests passing), and
-ready to commit.
-
-Files to stage:
-
-New production (7 untracked):
-- `src/main/java/com/flashsale/inventory/application/PreWarmStockResult.java`
-- `src/main/java/com/flashsale/inventory/application/PreWarmStockUseCase.java`
-- `src/main/java/com/flashsale/inventory/application/port/StockPreWarmPort.java`
-- `src/main/java/com/flashsale/inventory/application/port/StockPreWarmUnavailableException.java`
-- `src/main/java/com/flashsale/inventory/infra/redis/StockPreWarmLuaExecutor.java`
-- `src/main/java/com/flashsale/inventory/infra/redis/RedisStockPreWarmAdapter.java`
-- `src/main/java/com/flashsale/inventory/infra/config/InventoryConfiguration.java`
-
-New test (4 untracked):
-- `src/test/java/com/flashsale/inventory/application/PreWarmStockUseCaseTest.java`
-- `src/test/java/com/flashsale/inventory/infra/redis/StockPreWarmLuaExecutorTest.java`
-- `src/test/java/com/flashsale/inventory/infra/redis/RedisStockPreWarmAdapterTest.java`
-- `src/test/java/com/flashsale/inventory/integration/StockPreWarmIntegrationTest.java`
-
-Modified (3):
-- `src/main/resources/lua/stock-prewarm.lua` (full rewrite)
-- `src/main/java/com/flashsale/inventory/infra/config/RedisScriptConfiguration.java`
-- `src/test/java/com/flashsale/inventory/infra/config/RedisScriptConfigurationTest.java`
-
-Suggested commit message:
-
-```
-feat(inventory): implement pre-warm use case per ADR-020 Revision 2
-
-- Revision-fenced stock-prewarm.lua (both keys, all §13 table rows)
-- PreWarmStockUseCase: timing validation, snapshot load, TTL derivation
-- StockPreWarmPort / RedisStockPreWarmAdapter / StockPreWarmLuaExecutor
-- InventoryConfiguration: Clock bean
-- 32 new tests (9 unit use-case, 9 adapter, 6 executor, 7 integration, 1 script)
-- saleEnd > saleStart validation (ADR-020 §10 terminal failure)
-163 tests passing; 0 failed
-```
-
-## 2. Regression maintenance
-
-- Retain all 163 Inventory tests unless an approved contract intentionally
-  evolves.
-- Extend the real-infrastructure suites alongside any further slice so
-  revision fencing, TTL preservation, and zero-oversell behavior remain
-  protected.
-- Run the full Inventory module build after every slice.
-
-## 3. Week 3 documentation reconciliation
-
-- Update `context/PROJECT_TRUTH.md` to current repository reality.
-- Record which legacy Build Plan and Database Schema statements are obsolete.
-- Update `context/REPOSITORY_INDEX.md` for InventoryService files/directories.
-- Mark Week 3 complete only after the pre-warm commit is pushed and the working
-  and canonical documentation are reconciled.
+| Task | Status | Commit / Session |
+|---|---|---|
+| Pre-warm implementation commit | ✔ DONE | `7b68f14` |
+| Regression maintenance (163 tests) | ✔ DONE | maintained through all slices |
+| Documentation reconciliation | ✔ DONE | SESSION-010 |
 
 Kafka integration, Inventory GET endpoints, Reservation/Week 4 work, release,
-and reconciliation are not remaining Week 3 tasks and must not be introduced.
+and reconciliation are not Week 3 tasks and were not introduced.
 
 ---
 

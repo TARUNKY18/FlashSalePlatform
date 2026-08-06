@@ -2442,3 +2442,61 @@ No commit was made this session. All implementation files are in the working tre
 
 Kafka integration, Inventory REST endpoints, Reservation/Week 4, release, and
 reconciliation remain excluded.
+
+---
+
+## SESSION-010
+**Date:** 2026-08-06
+**Milestone:** Week 3 — Documentation Reconciliation
+**Outcome:** COMPLETE
+**Engineer:** Tarun K Y
+**Branch:** `main`
+**No implementation commit** — documentation-only session.
+
+---
+
+### Objective
+
+Reconcile context documents with repository reality after the pre-warm implementation
+was committed at `7b68f14` in SESSION-009 (working-tree commit). The pre-warm files
+were present but uncommitted when SESSION-009 ended; they were committed in the same
+session under commit `7b68f14 implemented redis-pre-warm`.
+
+---
+
+### Changes made
+
+| File | Change |
+|---|---|
+| `HANDOFF.md` | Updated `Latest commit` to `7b68f14`; removed "pending commit" and "untracked files" language; replaced "Remaining Week 3 Tasks" with completed-task table |
+| `context/CURRENT_STATE.md` | Status `🟡 IN PROGRESS` → `✅ COMPLETE`; updated commit reference; removed "pending commit" from Pre-Warm Use Case row; replaced remaining-work list with completed checkmarks; replaced "Next Recommended Task" with "Week 3 Status: COMPLETE" |
+| `context/PROJECT_TRUTH.md` | Added staleness banner (Version 3); updated service table (SaleService → COMPLETE Week 2, InventoryService → COMPLETE Week 3); updated technology table runtime-detail for Java, Spring Boot, Gradle, jqwik, Testcontainers, Flyway |
+| `context/REPOSITORY_INDEX.md` | `services/` and `build.gradle`/`settings.gradle` root entries updated from "Planned" to "Existing"; `services/` section expanded with SaleService and InventoryService subsections including production packages, test packages, and resources |
+| `context/SESSION_LOG.md` | This SESSION-010 append |
+
+---
+
+### No code changes
+
+Zero production Java files, test files, Lua scripts, Flyway migrations, or Gradle
+files were modified. `./gradlew :services:inventory-service:cleanTest :services:inventory-service:build`
+passes with `BUILD SUCCESSFUL`, 163 tests, 0 failed, 0 errors, 0 skipped.
+
+---
+
+### Week 3 final state
+
+| Slice | Commit |
+|---|---|
+| InventoryService skeleton | `0444c9b` |
+| Framework-free domain model | `213570a` |
+| Persistence, Flyway V1, Redis Lua, Redis adapter | `eecc75c` |
+| ProductRepository port and StockCounterService | `2a22457` |
+| PostgreSQL fallback | `9bb3ad7` |
+| Redis re-warming | `10069d8` |
+| Durable authority, revision-fenced projection, infrastructure tests | `bca1ff1` |
+| jqwik property-based stock correctness tests | `f12d67d` |
+| Pre-warm use case (ADR-020 Revision 2) | `7b68f14` |
+| Documentation reconciliation | SESSION-010 (no code commit) |
+
+Week 3: **COMPLETE**.

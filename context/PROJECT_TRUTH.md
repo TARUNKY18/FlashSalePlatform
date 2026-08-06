@@ -1,6 +1,8 @@
 # PROJECT_TRUTH.md
 ## Flash Sale Platform — Single Source of Truth
-**Version:** 2 (replaces the 2026-06-17 version)
+**Version:** 3 (replaces Version 2, 2026-06-17)
+
+> **Implementation status warning (2026-08-06):** The implementation-status fields in this document are stale — they reflect the state before Week 2 and Week 3 were implemented. For current implementation truth, see `HANDOFF.md` and `context/CURRENT_STATE.md`. The architecture, ADR, and design sections remain authoritative. Do not copy any "PLANNED — no code" field into implementation decisions.
 
 **Status legend:**
 - `VERIFIED` — confirmed via terminal output, docker logs, screenshots, or explicit command results.
@@ -114,9 +116,9 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 **Technology stack:**
 | Layer | Technology | Design detail | Runtime detail |
 |---|---|---|---|
-| Language / runtime | Java 21 | Virtual Threads, sealed interfaces, records | PLANNED — no JVM processes running |
-| Web framework | Spring Boot 3 (PLANNED — specific version "3.3" per infrastructure notes) | `spring.threads.virtual.enabled=true` | PLANNED — no services written |
-| Build tool | Gradle (PLANNED — "8.x" per infrastructure notes) | — | PLANNED — no `build.gradle`/`settings.gradle` written |
+| Language / runtime | Java 21 | Virtual Threads, sealed interfaces, records | VERIFIED — SaleService and InventoryService both run Java 21 virtual threads |
+| Web framework | Spring Boot 3.3.4 | `spring.threads.virtual.enabled=true` | VERIFIED — Spring Boot 3.3.4; SaleService (8081) and InventoryService (8082) |
+| Build tool | Gradle 8.10 wrapper | multi-module Groovy DSL | VERIFIED — `settings.gradle` includes `sale-service` and `inventory-service`; `./gradlew build` passes |
 | Messaging | Apache Kafka 3.7.0, KRaft mode | `AUTO_CREATE_TOPICS_ENABLE=false`, `enable.auto.commit=false`, `acks=all` | VERIFIED — `apache/kafka:3.7.0` running; `make health` returned `✓ Kafka broker reachable` confirmed 2026-06-17 |
 | Cache / in-memory | Redis Cluster, 3 primary shards / 1 replica each | AOF `everysec`, `allkeys-lru` | VERIFIED — `redis:7.2.5-alpine`, 6 nodes healthy, `cluster_state:ok` confirmed 2026-06-17 |
 | Relational DB | PostgreSQL 16 | 3 fully isolated instances | VERIFIED running (`postgres:16.3-alpine`, all 3 `pg_isready`) |
@@ -126,9 +128,9 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 | IaC | Terraform | — | PLANNED — no `.tf` files written |
 | Observability | Micrometer, Prometheus, OpenTelemetry, Tempo | `/actuator/prometheus`, 100%/10% trace sampling | PLANNED — no metrics or tracing code written |
 | Load testing | Gatling or k6 | 50,000 concurrent user simulation | PLANNED — no simulation files written |
-| Property-based testing | jqwik | Applied to the Redis Lua stock-decrement script | PLANNED — no test code written |
-| Integration testing | Testcontainers | Real Postgres/Redis/Kafka in tests | PLANNED — no test code written |
-| Migrations | Flyway | — | PLANNED — init scripts create extensions only; no application tables exist |
+| Property-based testing | jqwik 1.9.0 | Applied to Product stock domain model | VERIFIED — 5 properties × 1,000 generated examples in InventoryService; test-only classpath |
+| Integration testing | Testcontainers | Real Postgres/Redis/Kafka in tests | VERIFIED — PostgreSQL 16 and Redis 7.2 Testcontainers suites in InventoryService (28 tests) |
+| Migrations | Flyway | — | VERIFIED — V1 in SaleService (flash_sales, sale_schedules, sale_status_history); V1 in InventoryService (products, stock_levels) |
 
 **Package structure (PLANNED — designed, not created):** `com.flashsale.` with subpackages `sale/`, `inventory/`, `order/`, `notification/`, `analytics/`, each following `domain/{aggregate,entity,vo,event}`, `application/`, `infra/`.
 
@@ -136,12 +138,12 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 
 ## Services
 
-**Status: PLANNED for all five — zero Java code exists for any service.**
+**Status: SaleService and InventoryService COMPLETE (Week 3). OrderService, NotificationService, AnalyticsService: PLANNED.**
 
 | Service | Owns | DB / Schema | Kafka Role | Redis Role | Port | Code Status |
 |---|---|---|---|---|---|---|
-| SaleService | Sale lifecycle, scheduling, status machine | `sales_db` | Producer: `sale-events` | Cache: active sale metadata | 8081 | PLANNED — zero code written |
-| InventoryService | Stock levels, reservation, atomic decrement | `inventory_db` | Producer: `inventory-events` | Layer 1: stock counter (Lua DECR) | 8082 | PLANNED — zero code written |
+| SaleService | Sale lifecycle, scheduling, status machine | `sales_db` | Producer: `sale-events` | Cache: active sale metadata | 8081 | COMPLETE — Week 2; FlashSale aggregate, REST API, Flyway V1, 16 tests |
+| InventoryService | Stock levels, atomic decrement, pre-warm | `inventory_db` | Producer: `inventory-events` | Layer 1: stock counter (Lua DECR), pre-warm | 8082 | COMPLETE — Week 3; 44 production files, 163 tests, commit `7b68f14` |
 | OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PLANNED — zero code written |
 | NotificationService | Email, push, SMS fan-out | None (stateless) | Consumer: all three topics | None | 8084 | PLANNED — zero code written |
 | AnalyticsService | Event ingestion, metrics, dashboards | ClickHouse | Consumer: all three topics | None | 8085 | PLANNED — zero code written |

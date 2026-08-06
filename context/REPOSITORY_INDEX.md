@@ -13,7 +13,7 @@
 | `Makefile` | **Existing** | `make up` / `make clean` / `make health` execute from this directory |
 | `deployment/` | **Existing** | Visible in IDE screenshot |
 | `docs/` | **Existing** | Visible in IDE screenshot (collapsed — contents unconfirmed) |
-| `services/` | **Planned** | Not visible in screenshot; no Java code written |
+| `services/` | **Existing** | SaleService (Week 2) and InventoryService (Week 3) implemented |
 | `testing/` | **Planned** | Not visible in screenshot; no test code written |
 | `benchmarks/` | **Planned** | Not visible in screenshot; no load tests written |
 | `incidents/` | **Planned** | Not visible in screenshot; PM-001 generated but placement unconfirmed |
@@ -21,8 +21,8 @@
 | `INFRASTRUCTURE.md` | **Planned** | Generated in session; not confirmed placed |
 | `CURRENT_STATE.md` | **Planned** | Generated this session; not yet committed |
 | `PROJECT_TRUTH.md` | **Planned** | Generated this session; not yet committed |
-| `build.gradle` | **Planned** | Not written; no Gradle project exists |
-| `settings.gradle` | **Planned** | Not written |
+| `build.gradle` | **Existing** | Root Gradle build; Java 21 toolchain applied to all subprojects |
+| `settings.gradle` | **Existing** | Includes `services:sale-service` and `services:inventory-service` |
 | `.gitignore` | **Planned** | Generated in session; not confirmed placed |
 
 ---
@@ -134,20 +134,69 @@ downloaded, but whether they were committed to the repository is unknown.
 
 ---
 
-## `services/` — **Planned**
+## `services/` — **Existing**
 
 **Purpose:** One subdirectory per bounded context. No shared code between services.
 **Owner:** Each service owned independently.
-**Status:** Directory does not exist. Zero Java code written.
-**Dependencies:** Requires `deployment/docker/` working (Week 1 ✅). Starts Week 2.
+**Status:** SaleService (Week 2) and InventoryService (Week 3) complete. Three services pending.
+**Dependencies:** Requires `deployment/docker/` working (Week 1 ✅).
 
-| Subdirectory | Status | Starts |
+| Subdirectory | Status | Milestone |
 |---|---|---|
-| `services/sale-service/` | **Planned** | Week 2 |
-| `services/inventory-service/` | **Planned** | Week 3 |
+| `services/sale-service/` | **Existing** | Week 2 — complete |
+| `services/inventory-service/` | **Existing** | Week 3 — complete |
 | `services/order-service/` | **Planned** | Week 5 |
 | `services/notification-service/` | **Planned** | Week 8 |
 | `services/analytics-service/` | **Planned** | Week 9 |
+
+---
+
+### `services/sale-service/` — **Existing**
+
+**Status:** Complete (Week 2). 32 Java files; 12 passing tests.
+**Key classes:** `FlashSale` aggregate, `SCHEDULED→ACTIVE→ENDED→ARCHIVED` state machine, `SaleCommandService`, `SaleController`, `FlashSaleJpaEntity`, Flyway V1 (`flash_sales`, `sale_schedules`, `sale_status_history`).
+
+---
+
+### `services/inventory-service/` — **Existing**
+
+**Status:** Complete (Week 3). 44 production Java files; 26 test classes; 163 passing tests.
+**Latest commit:** `7b68f14` (`implemented redis-pre-warm`)
+
+#### Production packages
+
+| Package | Files | Responsibility |
+|---|---|---|
+| `com.flashsale.inventory` | 1 | Spring Boot entry point |
+| `com.flashsale.inventory.application` | 6 | Use cases and result types (`StockCounterService`, `PreWarmStockUseCase`, `StockDecrementResult`, `DurableStockDecrementResult`, `StockProjectionSyncResult`, `PreWarmStockResult`) |
+| `com.flashsale.inventory.application.port` | 8 | Outbound ports and unavailable exceptions |
+| `com.flashsale.inventory.domain.aggregate` | 1 | `Product` aggregate root |
+| `com.flashsale.inventory.domain.entity` | 1 | `StockLevel` entity |
+| `com.flashsale.inventory.domain.vo` | 4 | `StockCount`, `ProductId`, `SaleId`, `StockLevelId` |
+| `com.flashsale.inventory.infra.config` | 2 | `RedisScriptConfiguration`, `InventoryConfiguration` (Clock bean) |
+| `com.flashsale.inventory.infra.persistence` | 7 | JPA entities, mapper, Spring Data repository, adapters |
+| `com.flashsale.inventory.infra.redis` | 6 | Lua executors and Redis adapters |
+
+#### Test packages
+
+| Package | Classes | Tests |
+|---|---|---|
+| `com.flashsale.inventory.application` | 2 | unit |
+| `com.flashsale.inventory.domain.*` | 5 | unit + property-based (jqwik) |
+| `com.flashsale.inventory.infra.*` | 14 | unit |
+| `com.flashsale.inventory.integration` | 5 | Testcontainers (PostgreSQL 16 + Redis 7.2) |
+
+#### Resources
+
+| Path | Description |
+|---|---|
+| `src/main/resources/application.yml` | Service config (port 8082, virtual threads, PostgreSQL, Flyway, Redis Cluster) |
+| `src/main/resources/db/migration/V1__init.sql` | Flyway V1: `products` and `stock_levels` tables |
+| `src/main/resources/lua/stock-decrement.lua` | Atomic Redis stock decrement (integrated) |
+| `src/main/resources/lua/stock-projection-sync.lua` | Revision-fenced post-commit sync (integrated) |
+| `src/main/resources/lua/stock-prewarm.lua` | Revision-fenced pre-warm initialization (integrated) |
+| `src/main/resources/lua/stock-release.lua` | Stock release (not yet integrated) |
+| `src/main/resources/lua/stock-reconcile.lua` | Stock reconciliation (not yet integrated) |
 
 ---
 

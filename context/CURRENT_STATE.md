@@ -1,6 +1,6 @@
 # CURRENT_STATE.md
 **Milestone:** Week 3 — InventoryService
-**Status:** 🟡 IN PROGRESS
+**Status:** ✅ COMPLETE
 **Date:** 2026-08-06
 **Engineer:** Tarun K Y
 
@@ -11,12 +11,11 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `84d68ab` — `docs: synchronize project state after ADR-020 Revision 2` |
-| Implementation HEAD | `f12d67d` — `feat(inventory): add jqwik property-based stock correctness tests` |
-| Implementation commit status | Working tree: pre-warm implementation uncommitted. Last pushed implementation: `f12d67d` |
+| Latest commit | `7b68f14` — `implemented redis-pre-warm` |
+| Implementation commit status | All slices committed. Working tree: clean. HEAD: `7b68f14` |
 | Build | Whole-project `BUILD SUCCESSFUL` in 23s |
-| Production Java files | 37 |
-| Test classes | 22 |
+| Production Java files | 44 |
+| Test classes | 26 |
 | Inventory tests | 163 passed, 0 failed, 0 errors, 0 skipped |
 | SaleService regression | 16 passed, 0 failed, 0 errors, 0 skipped |
 
@@ -39,7 +38,7 @@
 | ✔ Infrastructure Correctness Tests | Real PostgreSQL and Redis Testcontainers coverage for Flyway/Hibernate, commit failure, concurrency, ambiguous Lua execution, disagreement, fencing, missing keys, and TTL behavior |
 | ✔ Property-Based Stock Correctness Tests | Test-scoped jqwik 1.9.0; five properties with 1,000 generated examples each cover exact decrement, non-negative stock, insufficient-stock non-mutation, exact depletion, repeated operations, boundaries, and overflow-safe input ranges |
 | ✔ ADR-020 Pre-Warm Architecture (Revision 2) | Six architecture-review findings adjudicated and resolved; governing architecture approved; no production or test code changed |
-| ✔ Pre-Warm Use Case (SESSION-009) | `PreWarmStockUseCase`, `StockPreWarmPort`, `RedisStockPreWarmAdapter`, `StockPreWarmLuaExecutor`, revision-fenced `stock-prewarm.lua`; `InventoryConfiguration` (`Clock` bean); `PreWarmStockResult` enum; 32 tests (+4 classes); reviewed and approved; **pending commit** |
+| ✔ Pre-Warm Use Case (SESSION-009, committed `7b68f14`) | `PreWarmStockUseCase`, `StockPreWarmPort`, `RedisStockPreWarmAdapter`, `StockPreWarmLuaExecutor`, revision-fenced `stock-prewarm.lua`; `InventoryConfiguration` (`Clock` bean); `PreWarmStockResult` enum; 32 tests (+4 classes); reviewed and approved; committed |
 
 ---
 
@@ -143,16 +142,13 @@ audit, outbox, Kafka, or Week 4 table exists.
 ## Remaining Week 3 Work
 
 - ✔ Pre-warm Architecture — ADR-020 Revision 2 approved (design complete)
-- ✔ Pre-warm Use Case implementation — complete, reviewed, approved; **pending commit**
-- ➡ Commit pre-warm implementation (all untracked/modified files in working tree)
-- ➡ Regression maintenance — retain 163-test baseline through any subsequent slice
-- ➡ Documentation reconciliation (`PROJECT_TRUTH.md`, `REPOSITORY_INDEX.md`)
+- ✔ Pre-warm Use Case implementation — committed at `7b68f14`
+- ✔ Commit pre-warm implementation — done at `7b68f14`
+- ✔ Regression maintenance — 163-test baseline maintained
+- ✔ Documentation reconciliation — completed in SESSION-010
 
 ---
 
-## Next Recommended Task
+## Week 3 Status
 
-**Commit the pre-warm implementation.** All working-tree files are reviewed, approved,
-and build-verified (163 tests, `BUILD SUCCESSFUL`). Stage the 7 new production files,
-4 new test files, and 3 modified files; commit with an appropriate `feat(inventory):`
-message; push to `origin/main`. Then proceed to documentation reconciliation.
+Week 3 is **COMPLETE**. All implementation slices committed and pushed to `origin/main`. Documentation reconciled in SESSION-010.
