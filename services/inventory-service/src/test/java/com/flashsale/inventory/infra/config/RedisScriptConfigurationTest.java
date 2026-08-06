@@ -51,4 +51,24 @@ class RedisScriptConfigurationTest {
             assertSame(first, second);
         }
     }
+
+    @Test
+    void loadsPreWarmScriptAsSingletonWithRevisionFencedContract() {
+        try (AnnotationConfigApplicationContext context =
+                     new AnnotationConfigApplicationContext(RedisScriptConfiguration.class)) {
+            RedisScript<?> first =
+                    context.getBean("stockPreWarmScript", RedisScript.class);
+            RedisScript<?> second =
+                    context.getBean("stockPreWarmScript", RedisScript.class);
+
+            String scriptText = first.getScriptAsString();
+
+            assertTrue(scriptText.contains("redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[3])"));
+            assertTrue(scriptText.contains("redis.call('SET', KEYS[2], ARGV[2], 'PX', ARGV[3])"));
+            assertTrue(scriptText.contains("local WARMED = 1"));
+            assertTrue(scriptText.contains("local ALREADY_CURRENT = 3"));
+            assertEquals(Long.class, first.getResultType());
+            assertSame(first, second);
+        }
+    }
 }

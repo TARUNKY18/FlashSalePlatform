@@ -1,27 +1,31 @@
 # Flash Sale Platform — Engineering Handoff
 
-**Handoff date:** 2026-08-05
+**Handoff date:** 2026-08-06
 
 **Current milestone:** Week 3 — InventoryService
 
-**Week 3 status:** In progress
+**Week 3 status:** In progress — pre-warm use case implementation complete, pending commit
 
 **Branch:** `main`
 
+**Latest commit:** `84d68ab` (`docs: synchronize project state after ADR-020 Revision 2`), pushed to `origin/main`
+
 **Implementation HEAD:** `f12d67d` (`feat(inventory): add jqwik property-based stock correctness tests`), pushed to `origin/main`
 
-**Documentation HEAD:** `614d2cd` (`docs(adr): revise ADR-020 after architecture review adjudication`), pushed to `origin/main`
+**Working tree:** Pre-warm use case implementation present as untracked/modified files.
+`BUILD SUCCESSFUL`, 163 Inventory tests passing. No commit made in SESSION-009.
 
 **Audience:** The senior engineer or Codex session continuing Week 3 development
 
-This is the entry document for the next development session. It records the
-approved repository state through the ADR-020 Revision 2 documentation slice.
+This is the entry document for the next development session. The pre-warm use case
+implementation (SESSION-009) is complete and reviewed (`IMPLEMENTATION APPROVED`),
+but **not yet committed**. The first task for the next session is to commit all
+pre-warm working-tree files, then complete documentation reconciliation.
+
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
 ADR-020 (Pre-Warm Architecture) is now approved at Revision 2 following
-independent architecture review of six findings, all resolved. Week 3 remains
-incomplete because the pre-warm use case implementation and final documentation
-reconciliation remain unfinished.
+independent architecture review of six findings, all resolved.
 
 > **Documentation drift warning:** `context/PROJECT_TRUTH.md` and
 > `context/REPOSITORY_INDEX.md` still contain stale implementation status.
@@ -198,16 +202,16 @@ these approved implementation commits:
 | `bca1ff1` | PostgreSQL durable authority, revision-fenced Redis projection, and real infrastructure correctness tests |
 | `f12d67d` | jqwik property-based stock correctness tests |
 
-InventoryService currently contains:
+InventoryService currently contains (working tree — pre-warm implementation not yet committed):
 
-- 30 production Java files.
-- 18 runnable test classes.
-- 131 passing Inventory tests: 110 unit/property and 21 real Testcontainers tests.
-- Two integrated Lua scripts: `stock-decrement.lua` and
-  `stock-projection-sync.lua`.
+- 37 production Java files (+7 untracked pre-warm files).
+- 22 runnable test classes (+4 untracked pre-warm test classes).
+- 163 passing Inventory tests: 135 unit/property and 28 real Testcontainers tests.
+- Three Lua scripts: `stock-decrement.lua`, `stock-projection-sync.lua`, and
+  `stock-prewarm.lua` (modified/untracked).
 - Two Flyway-managed tables: `products` and `stock_levels`.
-- No REST endpoints, Kafka code, pre-warm use case, Reservation work, release
-  integration, or reconciliation integration.
+- No REST endpoints, Kafka code, Reservation work, release integration, or
+  reconciliation integration.
 
 ## ✔ Skeleton
 
@@ -1375,21 +1379,24 @@ is commit `f12d67d`, already pushed to `origin/main`.
 ## Latest successful build
 
 ```text
-Command: ./gradlew clean build
-Result:  BUILD SUCCESSFUL
-Time:    59 seconds
-Tests:   Inventory 131; Sale 16; 0 failed, 0 errors, 0 skipped
+Command: ./gradlew :services:inventory-service:test && ./gradlew build
+Result:  BUILD SUCCESSFUL (SESSION-009, working tree, pre-warm uncommitted)
+Time:    23 seconds
+Tests:   Inventory 163; Sale 16; 0 failed, 0 errors, 0 skipped
 ```
 
 ## Passing test inventory
 
 | Inventory test category | Runnable classes | Passing tests |
 |---|---:|---:|
-| Unit/property | 15 | 110 |
-| PostgreSQL/Redis Testcontainers integration | 3 | 21 |
-| **Inventory total** | **18** | **131** |
+| Unit/property | 19 | 135 |
+| PostgreSQL/Redis Testcontainers integration | 4 | 28 |
+| **Inventory total** | **23** | **163** |
 
 The complete repository build also runs 16 passing SaleService tests.
+
+> **Note:** 4 new test classes and modified `RedisScriptConfigurationTest` are
+> untracked/modified. Counts reflect the current working-tree build.
 
 Non-failing warnings observed:
 
@@ -1426,41 +1433,54 @@ Non-failing warnings observed:
 
 Only unfinished work appears in this section.
 
-## 1. Pre-warm use case
+## 1. Commit the pre-warm implementation ← START HERE
 
-ADR-020 Revision 2 is approved and is the governing architecture contract for
-this slice. Implement against it; do not invent new contracts.
+The pre-warm use case implementation (SESSION-009) is **complete and approved**
+but not yet committed. The working tree contains 12 untracked files and 3
+modified files. All files are reviewed, build-verified (163 tests passing), and
+ready to commit.
 
-- Consume the pre-warm-due integration event from `sale-events`; map it to
-  `PreWarmStockUseCase` input (`ProductId`, `SaleId`, `saleStart`, `saleEnd`).
-- Validate the pre-start timing window using an injected clock; report
-  `NOT_DUE` or `MISSED_WINDOW` without mutating Redis.
-- Load the authoritative snapshot — `current_stock` and `stock_levels.version`
-  — from PostgreSQL through the existing `ProductRepository` port.
-- Integrate or replace `lua/stock-prewarm.lua` so it initializes both
-  `stock:{saleId}` and `stock:version:{saleId}` atomically with the approved
-  revision fence and TTL (`saleEnd + 10 minutes`).
-- Derive the absolute expiration in InventoryService; never accept TTL from the
-  event payload.
-- Preserve same-slot `{saleId}` hash tag, revision-fenced idempotency, and
-  partial-pair repair semantics as defined in ADR-020 §9, §11, and §13.
-- Add `StockPreWarmPort`, its unavailable exception, Redis adapter, Lua
-  executor, and `PreWarmStockUseCase`; wire through `RedisScriptConfiguration`.
+Files to stage:
 
-**Assumptions future implementation must preserve (from ADR-020 Revision 2):**
-- `preWarmAt` is the readiness deadline; the scheduler fires before it.
-- Partial-pair repair only if incoming revision ≥ surviving key's revision.
-- Both-keys-missing initialization with stale snapshot is corrected by
-  post-commit sync; `MISSED_WINDOW` at `saleStart` bounds the stale window.
-- Persistent or TTL-inconsistent keys are treated as invalid (fail closed).
-- Terminal outcomes are acknowledged; retryable outcomes withhold acknowledgement.
-- No retry count, backoff, or DLQ is defined by this ADR.
+New production (7 untracked):
+- `src/main/java/com/flashsale/inventory/application/PreWarmStockResult.java`
+- `src/main/java/com/flashsale/inventory/application/PreWarmStockUseCase.java`
+- `src/main/java/com/flashsale/inventory/application/port/StockPreWarmPort.java`
+- `src/main/java/com/flashsale/inventory/application/port/StockPreWarmUnavailableException.java`
+- `src/main/java/com/flashsale/inventory/infra/redis/StockPreWarmLuaExecutor.java`
+- `src/main/java/com/flashsale/inventory/infra/redis/RedisStockPreWarmAdapter.java`
+- `src/main/java/com/flashsale/inventory/infra/config/InventoryConfiguration.java`
+
+New test (4 untracked):
+- `src/test/java/com/flashsale/inventory/application/PreWarmStockUseCaseTest.java`
+- `src/test/java/com/flashsale/inventory/infra/redis/StockPreWarmLuaExecutorTest.java`
+- `src/test/java/com/flashsale/inventory/infra/redis/RedisStockPreWarmAdapterTest.java`
+- `src/test/java/com/flashsale/inventory/integration/StockPreWarmIntegrationTest.java`
+
+Modified (3):
+- `src/main/resources/lua/stock-prewarm.lua` (full rewrite)
+- `src/main/java/com/flashsale/inventory/infra/config/RedisScriptConfiguration.java`
+- `src/test/java/com/flashsale/inventory/infra/config/RedisScriptConfigurationTest.java`
+
+Suggested commit message:
+
+```
+feat(inventory): implement pre-warm use case per ADR-020 Revision 2
+
+- Revision-fenced stock-prewarm.lua (both keys, all §13 table rows)
+- PreWarmStockUseCase: timing validation, snapshot load, TTL derivation
+- StockPreWarmPort / RedisStockPreWarmAdapter / StockPreWarmLuaExecutor
+- InventoryConfiguration: Clock bean
+- 32 new tests (9 unit use-case, 9 adapter, 6 executor, 7 integration, 1 script)
+- saleEnd > saleStart validation (ADR-020 §10 terminal failure)
+163 tests passing; 0 failed
+```
 
 ## 2. Regression maintenance
 
-- Retain all 131 Inventory tests unless an approved contract intentionally
+- Retain all 163 Inventory tests unless an approved contract intentionally
   evolves.
-- Extend the real-infrastructure suites alongside any pre-warm change so
+- Extend the real-infrastructure suites alongside any further slice so
   revision fencing, TTL preservation, and zero-oversell behavior remain
   protected.
 - Run the full Inventory module build after every slice.
@@ -1470,8 +1490,8 @@ this slice. Implement against it; do not invent new contracts.
 - Update `context/PROJECT_TRUTH.md` to current repository reality.
 - Record which legacy Build Plan and Database Schema statements are obsolete.
 - Update `context/REPOSITORY_INDEX.md` for InventoryService files/directories.
-- Mark Week 3 complete only after the pre-warm slice passes and the working and
-  canonical documentation are reconciled.
+- Mark Week 3 complete only after the pre-warm commit is pushed and the working
+  and canonical documentation are reconciled.
 
 Kafka integration, Inventory GET endpoints, Reservation/Week 4 work, release,
 and reconciliation are not remaining Week 3 tasks and must not be introduced.

@@ -2251,3 +2251,194 @@ Implementation remains at `f12d67d` (unchanged). Documentation HEAD is
 The ADR-020 architecture design is approved and complete. Kafka, Inventory REST,
 Reservation/Week 4, cross-service integration, release, and reconciliation
 implementation remain out of scope.
+
+---
+
+## SESSION-009
+
+**Date:** 2026-08-06
+**Milestone:** Week 3 — Pre-Warm Use Case Implementation
+**Outcome:** IMPLEMENTATION COMPLETE — PENDING COMMIT
+**Engineer:** Tarun K Y
+**Branch:** `main`
+**Starting HEAD:** `84d68ab` (`docs: synchronize project state after ADR-020 Revision 2`)
+**Implementation commit:** None — implementation exists in the working tree, not yet committed
+
+---
+
+### 1. Objective and governing scope
+
+Implement the approved pre-warm use case slice per the ADR-020 Revision 2 contract.
+
+Explicitly included:
+- `stock-prewarm.lua` — full rewrite (revision-fenced, both keys, all ADR-020 §13 rows)
+- `PreWarmStockResult` enum
+- `StockPreWarmPort` application port
+- `StockPreWarmUnavailableException`
+- `PreWarmStockUseCase` service
+- `StockPreWarmLuaExecutor` infrastructure executor
+- `RedisStockPreWarmAdapter` infrastructure adapter
+- `InventoryConfiguration` (`Clock` bean)
+- `RedisScriptConfiguration` update (`stockPreWarmScript` bean)
+- Unit and integration tests (+32 tests)
+
+Explicitly excluded: Kafka consumer, `@Scheduled` trigger, REST endpoint, DTOs,
+Reservation, Release, SaleService changes, Flyway migrations, and any scope beyond
+ADR-020 §14–§15 application and infrastructure contracts.
+
+Scope boundary decision before coding:
+- Kafka consumer deferred (HANDOFF.md Rule 23 is an explicit gate constraint)
+- `@Scheduled` trigger deferred
+- Entry point: `PreWarmStockUseCase.preWarm(ProductId, SaleId, Instant saleStart, Instant saleEnd)`, callable by tests or a future adapter
+
+---
+
+### 2. Lua script
+
+The pre-existing `stock-prewarm.lua` was incompatible with ADR-020 Revision 2
+(marker-based, no revision key, caller-supplied stock). It was rewritten entirely.
+
+New contract:
+- `KEYS[1] = stock:{saleId}`, `KEYS[2] = stock:version:{saleId}`
+- `ARGV[1] = stock`, `ARGV[2] = revision`, `ARGV[3] = TTL ms`
+- Returns: `1 = WARMED`, `2 = UPDATED`, `3 = ALREADY_CURRENT`, `4 = STALE_IGNORED`, `-1 = INVALID_STATE`
+
+All seven rows of the ADR-020 §13 interaction table are implemented.
+`normalize_non_negative_integer` and `compare_non_negative_integers` follow the
+pattern from `stock-projection-sync.lua`. `PEXPIRETIME` requires Redis 7.0+;
+test infrastructure uses Redis 7.2.
+
+`UPDATED` path: `SET KEYS[1] ARGV[1] KEEPTTL` preserves the existing absolute
+expiration on the stock key; `SET KEYS[2] ARGV[2]` then `PEXPIREAT KEYS[2] stock_expiry`
+mirrors it to the version key.
+
+---
+
+### 3. Architectural decisions
+
+- ADR-020 §10 "invalid sale windows": `saleEnd <= saleStart` throws
+  `IllegalArgumentException` at use-case entry, before any clock, DB, or Redis access.
+- ADR-020 §5 timing: `PRE_WARM_WINDOW = 60s`; `NOT_DUE` before window; `MISSED_WINDOW`
+  at or after `saleStart`.
+- ADR-020 §8 TTL: derived as `saleEnd + 10 minutes − now` inside InventoryService; never
+  accepted from caller.
+- ADR-020 §7 revision source: `stockLevel.version()` from the same PostgreSQL snapshot;
+  never assumed zero.
+- `INVALID_STATE` Lua return (`-1`) is terminal: returned as `PreWarmStockResult.INVALID_STATE`,
+  not thrown. Transport/null/unknown results throw `StockPreWarmUnavailableException`.
+- `Clock` injected through `InventoryConfiguration.systemUtcClock()`.
+- Partial-pair stock-key-only → `INVALID_STATE` (no revision available; fail closed).
+- Partial-pair version-key-only with equal/newer incoming revision → repair with new TTL (`WARMED`).
+
+---
+
+### 4. New and modified production files
+
+New:
+
+| File | Responsibility |
+|---|---|
+| `application/PreWarmStockResult.java` | Seven-value result enum |
+| `application/PreWarmStockUseCase.java` | Timing, snapshot load, TTL derivation, delegation |
+| `application/port/StockPreWarmPort.java` | Infrastructure-neutral pre-warm outbound contract |
+| `application/port/StockPreWarmUnavailableException.java` | Retryable transport failure signal |
+| `infra/redis/StockPreWarmLuaExecutor.java` | Hash-tagged keys, TTL serialization, script execution |
+| `infra/redis/RedisStockPreWarmAdapter.java` | Lua result mapping, transport failure translation |
+| `infra/config/InventoryConfiguration.java` | `Clock.systemUTC()` bean |
+
+Modified:
+
+| File | Change |
+|---|---|
+| `resources/lua/stock-prewarm.lua` | Full rewrite — revision-fenced, dual keys, ADR-020 §13 |
+| `infra/config/RedisScriptConfiguration.java` | Added `stockPreWarmScript` singleton bean |
+
+---
+
+### 5. New and modified test files
+
+New:
+
+| Test class | Tests | Coverage |
+|---|---:|---|
+| `StockPreWarmLuaExecutorTest` | 6 | Parameterized raw results (5), invalid input rejection (1) |
+| `RedisStockPreWarmAdapterTest` | 9 | Parameterized result mapping (5), null/unknown/transport/serialization (4) |
+| `PreWarmStockUseCaseTest` | 9 | saleEnd>saleStart, NOT_DUE, MISSED_WINDOW variants, product/stockLevel absence, delegation with correct TTL, all port results, nulls |
+| `StockPreWarmIntegrationTest` | 7 | Real Redis: WARMED, ALREADY_CURRENT, STALE_IGNORED, UPDATED, partial-pair repair, partial-pair fail-closed, TTL preservation |
+| **Added** | **+32** | |
+
+Modified:
+
+| Test class | Change |
+|---|---|
+| `RedisScriptConfigurationTest` | Added `loadsPreWarmScriptAsSingletonWithRevisionFencedContract` |
+
+---
+
+### 6. Implementation review and VALID finding
+
+An independent review classified all findings as VALID, PARTIALLY VALID, or INVALID.
+
+**One VALID finding was identified and resolved:**
+
+`PreWarmStockUseCase.preWarm()` did not validate `saleEnd > saleStart`. If
+`saleEnd < saleStart` but `saleEnd + 10 minutes > now`, TTL was positive, timing
+checks passed, and execution proceeded with invalid sale data. ADR-020 §10 names
+"invalid sale windows" as terminal deterministic failures.
+
+**Fix:** Added `if (!saleEnd.isAfter(saleStart)) throw new IllegalArgumentException(...)`
+after null checks. Removed `returnsMissedWindowWhenTtlIsNonPositive` test (its scenario
+required `saleEnd < saleStart`, now caught upfront; the non-positive TTL guard is
+unreachable with valid inputs inside the execution window). Added
+`throwsWhenSaleEndNotAfterSaleStart` test.
+
+Post-fix review verdict: **IMPLEMENTATION APPROVED**.
+
+---
+
+### 7. Verification
+
+```bash
+./gradlew :services:inventory-service:test
+BUILD SUCCESSFUL
+163 tests passed, 0 failed, 0 errors, 0 skipped
+
+./gradlew build
+BUILD SUCCESSFUL in 23s
+InventoryService: 163 passed; SaleService: 16 passed; 0 failed, 0 errors, 0 skipped
+```
+
+| Inventory test category | Classes | Tests |
+|---|---:|---:|
+| Unit / property | 19 | 135 |
+| PostgreSQL/Redis Testcontainers integration | 4 | 28 |
+| **Total** | **23** | **163** |
+
+---
+
+### 8. Commit status
+
+No commit was made this session. All implementation files are in the working tree:
+
+- Untracked new production files: `PreWarmStockResult.java`, `StockPreWarmPort.java`,
+  `StockPreWarmUnavailableException.java`, `PreWarmStockUseCase.java`,
+  `StockPreWarmLuaExecutor.java`, `RedisStockPreWarmAdapter.java`, `InventoryConfiguration.java`
+- Untracked new test files: `StockPreWarmLuaExecutorTest.java`,
+  `RedisStockPreWarmAdapterTest.java`, `PreWarmStockUseCaseTest.java`,
+  `StockPreWarmIntegrationTest.java`
+- Modified: `stock-prewarm.lua`, `RedisScriptConfiguration.java`, `RedisScriptConfigurationTest.java`
+
+---
+
+### 9. Remaining Week 3 work
+
+1. **Commit the pre-warm implementation** — all untracked/modified files currently in
+   the working tree.
+2. **Regression maintenance** — retain the 163-test baseline through any subsequent slice.
+3. **Documentation reconciliation** — update `context/PROJECT_TRUTH.md` and
+   `context/REPOSITORY_INDEX.md`; record obsolete Build Plan and Database Schema
+   statements; mark Week 3 complete only after pre-warm is committed and documentation
+   is reconciled.
+
+Kafka integration, Inventory REST endpoints, Reservation/Week 4, release, and
+reconciliation remain excluded.

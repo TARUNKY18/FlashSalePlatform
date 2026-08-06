@@ -1,7 +1,7 @@
 # CURRENT_STATE.md
 **Milestone:** Week 3 — InventoryService
 **Status:** 🟡 IN PROGRESS
-**Date:** 2026-08-05
+**Date:** 2026-08-06
 **Engineer:** Tarun K Y
 
 ---
@@ -11,13 +11,13 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `614d2cd` — `docs(adr): revise ADR-020 after architecture review adjudication` |
+| Latest commit | `84d68ab` — `docs: synchronize project state after ADR-020 Revision 2` |
 | Implementation HEAD | `f12d67d` — `feat(inventory): add jqwik property-based stock correctness tests` |
-| Implementation commit status | Pushed; local `main` matches `origin/main` |
-| Build | Whole-project `BUILD SUCCESSFUL` in 59s |
-| Production Java files | 30 |
-| Test classes | 18 |
-| Inventory tests | 131 passed, 0 failed, 0 errors, 0 skipped |
+| Implementation commit status | Working tree: pre-warm implementation uncommitted. Last pushed implementation: `f12d67d` |
+| Build | Whole-project `BUILD SUCCESSFUL` in 23s |
+| Production Java files | 37 |
+| Test classes | 22 |
+| Inventory tests | 163 passed, 0 failed, 0 errors, 0 skipped |
 | SaleService regression | 16 passed, 0 failed, 0 errors, 0 skipped |
 
 ---
@@ -39,26 +39,23 @@
 | ✔ Infrastructure Correctness Tests | Real PostgreSQL and Redis Testcontainers coverage for Flyway/Hibernate, commit failure, concurrency, ambiguous Lua execution, disagreement, fencing, missing keys, and TTL behavior |
 | ✔ Property-Based Stock Correctness Tests | Test-scoped jqwik 1.9.0; five properties with 1,000 generated examples each cover exact decrement, non-negative stock, insufficient-stock non-mutation, exact depletion, repeated operations, boundaries, and overflow-safe input ranges |
 | ✔ ADR-020 Pre-Warm Architecture (Revision 2) | Six architecture-review findings adjudicated and resolved; governing architecture approved; no production or test code changed |
+| ✔ Pre-Warm Use Case (SESSION-009) | `PreWarmStockUseCase`, `StockPreWarmPort`, `RedisStockPreWarmAdapter`, `StockPreWarmLuaExecutor`, revision-fenced `stock-prewarm.lua`; `InventoryConfiguration` (`Clock` bean); `PreWarmStockResult` enum; 32 tests (+4 classes); reviewed and approved; **pending commit** |
 
 ---
 
 ## Verification
 
 ```text
-./gradlew :services:inventory-service:test --tests 'com.flashsale.inventory.domain.aggregate.ProductStockCorrectnessPropertyTest'
+./gradlew :services:inventory-service:test
 BUILD SUCCESSFUL in 23s
-5 properties / 5,000 generated examples passed
+163 tests passed, 0 failed, 0 errors, 0 skipped
 
-./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
-BUILD SUCCESSFUL in 30s
-131 tests passed, 0 failed, 0 errors, 0 skipped
-
-./gradlew clean build
-BUILD SUCCESSFUL in 59s
-Inventory: 131 passed; SaleService: 16 passed; 0 failed/errors/skipped
+./gradlew build
+BUILD SUCCESSFUL in 23s
+Inventory: 163 passed; SaleService: 16 passed; 0 failed/errors/skipped
 ```
 
-Inventory verification comprises 110 unit/property tests and 21 real
+Inventory verification comprises 135 unit/property tests and 28 real
 PostgreSQL/Redis Testcontainers tests. jqwik is present only on the Inventory
 test runtime classpath and is absent from its production runtime classpath.
 
@@ -130,9 +127,10 @@ audit, outbox, Kafka, or Week 4 table exists.
 - A PostgreSQL transaction and Product-root lock on every potentially
   successful request increase latency and contention.
 - Product-root locking serializes different sales for the same Product.
+- Pre-warm use case is implemented but not yet committed; working tree must be
+  committed before proceeding to documentation reconciliation.
 - Missing or revisionless Redis stock remains unavailable until pre-warm;
   independent revision-key eviction can increase PostgreSQL load.
-- Future pre-warm/reconciliation must write compatible revision keys.
 - Standalone Redis Testcontainers coverage does not prove Redis Cluster
   topology behavior.
 - A committed response lost before the client receives it can be retried and
@@ -145,17 +143,16 @@ audit, outbox, Kafka, or Week 4 table exists.
 ## Remaining Week 3 Work
 
 - ✔ Pre-warm Architecture — ADR-020 Revision 2 approved (design complete)
-- ➡ Pre-warm Use Case implementation (against approved ADR-020 Revision 2 contract)
-- ➡ Regression maintenance for any subsequently approved Week 3 slice
-- ➡ Documentation reconciliation
+- ✔ Pre-warm Use Case implementation — complete, reviewed, approved; **pending commit**
+- ➡ Commit pre-warm implementation (all untracked/modified files in working tree)
+- ➡ Regression maintenance — retain 163-test baseline through any subsequent slice
+- ➡ Documentation reconciliation (`PROJECT_TRUTH.md`, `REPOSITORY_INDEX.md`)
 
 ---
 
 ## Next Recommended Task
 
-**Pre-warm Use Case implementation:** implement the approved ADR-020 Revision 2
-contract — trigger/source event consumption, pre-start timing validation,
-authoritative PostgreSQL snapshot load, revision-compatible atomic Lua
-initialization, and TTL derivation from `saleEnd + 10 minutes`. Preserve
-the 131-test baseline. Do not add REST, Kafka, Reservation, release,
-reconciliation, or retry logic without separate approval.
+**Commit the pre-warm implementation.** All working-tree files are reviewed, approved,
+and build-verified (163 tests, `BUILD SUCCESSFUL`). Stage the 7 new production files,
+4 new test files, and 3 modified files; commit with an appropriate `feat(inventory):`
+message; push to `origin/main`. Then proceed to documentation reconciliation.
