@@ -10,13 +10,17 @@
 
 **Implementation HEAD:** `f12d67d` (`feat(inventory): add jqwik property-based stock correctness tests`), pushed to `origin/main`
 
+**Documentation HEAD:** `614d2cd` (`docs(adr): revise ADR-020 after architecture review adjudication`), pushed to `origin/main`
+
 **Audience:** The senior engineer or Codex session continuing Week 3 development
 
 This is the entry document for the next development session. It records the
-approved repository state through the Property-Based Stock Correctness Tests
-slice. The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
+approved repository state through the ADR-020 Revision 2 documentation slice.
+The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
-Week 3 remains incomplete because pre-warm and final documentation
+ADR-020 (Pre-Warm Architecture) is now approved at Revision 2 following
+independent architecture review of six findings, all resolved. Week 3 remains
+incomplete because the pre-warm use case implementation and final documentation
 reconciliation remain unfinished.
 
 > **Documentation drift warning:** `context/PROJECT_TRUTH.md` and
@@ -1424,15 +1428,33 @@ Only unfinished work appears in this section.
 
 ## 1. Pre-warm use case
 
-- Integrate the existing `lua/stock-prewarm.lua` through configuration,
-  executor, Redis-neutral port, and adapter.
-- Initialize a revision compatible with
-  `stock:version:{saleId}` as required by the active projection fence.
-- Add the approved application trigger/input contract without introducing
-  Kafka or a new endpoint by assumption.
-- Pass total stock and TTL.
-- Preserve same-slot keys and the approved TTL rule once sale-end ownership is
-  defined.
+ADR-020 Revision 2 is approved and is the governing architecture contract for
+this slice. Implement against it; do not invent new contracts.
+
+- Consume the pre-warm-due integration event from `sale-events`; map it to
+  `PreWarmStockUseCase` input (`ProductId`, `SaleId`, `saleStart`, `saleEnd`).
+- Validate the pre-start timing window using an injected clock; report
+  `NOT_DUE` or `MISSED_WINDOW` without mutating Redis.
+- Load the authoritative snapshot — `current_stock` and `stock_levels.version`
+  — from PostgreSQL through the existing `ProductRepository` port.
+- Integrate or replace `lua/stock-prewarm.lua` so it initializes both
+  `stock:{saleId}` and `stock:version:{saleId}` atomically with the approved
+  revision fence and TTL (`saleEnd + 10 minutes`).
+- Derive the absolute expiration in InventoryService; never accept TTL from the
+  event payload.
+- Preserve same-slot `{saleId}` hash tag, revision-fenced idempotency, and
+  partial-pair repair semantics as defined in ADR-020 §9, §11, and §13.
+- Add `StockPreWarmPort`, its unavailable exception, Redis adapter, Lua
+  executor, and `PreWarmStockUseCase`; wire through `RedisScriptConfiguration`.
+
+**Assumptions future implementation must preserve (from ADR-020 Revision 2):**
+- `preWarmAt` is the readiness deadline; the scheduler fires before it.
+- Partial-pair repair only if incoming revision ≥ surviving key's revision.
+- Both-keys-missing initialization with stale snapshot is corrected by
+  post-commit sync; `MISSED_WINDOW` at `saleStart` bounds the stale window.
+- Persistent or TTL-inconsistent keys are treated as invalid (fail closed).
+- Terminal outcomes are acknowledged; retryable outcomes withhold acknowledgement.
+- No retry count, backoff, or DLQ is defined by this ADR.
 
 ## 2. Regression maintenance
 

@@ -11,7 +11,8 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `f12d67d` — `feat(inventory): add jqwik property-based stock correctness tests` |
+| Latest commit | `614d2cd` — `docs(adr): revise ADR-020 after architecture review adjudication` |
+| Implementation HEAD | `f12d67d` — `feat(inventory): add jqwik property-based stock correctness tests` |
 | Implementation commit status | Pushed; local `main` matches `origin/main` |
 | Build | Whole-project `BUILD SUCCESSFUL` in 59s |
 | Production Java files | 30 |
@@ -37,6 +38,7 @@
 | ✔ Revision-fenced Redis Projection | `StockProjectionSyncPort`; stock/version hash-tagged keys; equal/newer apply, older ignore, revisionless invalidation, TTL preservation and mirroring |
 | ✔ Infrastructure Correctness Tests | Real PostgreSQL and Redis Testcontainers coverage for Flyway/Hibernate, commit failure, concurrency, ambiguous Lua execution, disagreement, fencing, missing keys, and TTL behavior |
 | ✔ Property-Based Stock Correctness Tests | Test-scoped jqwik 1.9.0; five properties with 1,000 generated examples each cover exact decrement, non-negative stock, insufficient-stock non-mutation, exact depletion, repeated operations, boundaries, and overflow-safe input ranges |
+| ✔ ADR-020 Pre-Warm Architecture (Revision 2) | Six architecture-review findings adjudicated and resolved; governing architecture approved; no production or test code changed |
 
 ---
 
@@ -142,7 +144,8 @@ audit, outbox, Kafka, or Week 4 table exists.
 
 ## Remaining Week 3 Work
 
-- ➡ Pre-warm Use Case
+- ✔ Pre-warm Architecture — ADR-020 Revision 2 approved (design complete)
+- ➡ Pre-warm Use Case implementation (against approved ADR-020 Revision 2 contract)
 - ➡ Regression maintenance for any subsequently approved Week 3 slice
 - ➡ Documentation reconciliation
 
@@ -150,7 +153,9 @@ audit, outbox, Kafka, or Week 4 table exists.
 
 ## Next Recommended Task
 
-**Pre-warm Use Case:** approve the sale timing/trigger input and ensure pre-warm
-initializes both stock and revision keys compatibly with the fenced projection
-contract. Do not add REST, Kafka, Reservation, release, reconciliation, or
-retry logic without separate approval.
+**Pre-warm Use Case implementation:** implement the approved ADR-020 Revision 2
+contract — trigger/source event consumption, pre-start timing validation,
+authoritative PostgreSQL snapshot load, revision-compatible atomic Lua
+initialization, and TTL derivation from `saleEnd + 10 minutes`. Preserve
+the 131-test baseline. Do not add REST, Kafka, Reservation, release,
+reconciliation, or retry logic without separate approval.

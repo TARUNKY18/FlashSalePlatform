@@ -2165,3 +2165,89 @@ Property-based stock correctness testing is complete and is not remaining
 scope. Kafka, Inventory REST, Reservation/Week 4, cross-service integration,
 performance optimization, refactoring, retries, release, and reconciliation
 implementation remain out of scope.
+
+## SESSION-008
+
+**Date:** 2026-08-06
+**Milestone:** Week 3 — ADR-020 Architecture Review and Revision
+**Outcome:** COMPLETE
+**Engineer:** Tarun K Y
+**Branch:** `main`
+**Documentation commit:** `614d2cd` (`docs(adr): revise ADR-020 after architecture review adjudication`)
+**Commit status:** Pushed; local `main`, `HEAD`, and `origin/main` identify the
+same commit.
+
+---
+
+### 1. Implemented Scope
+
+This session was documentation-only. No production code, test code, Lua
+scripts, SQL, Gradle configuration, or application properties were changed.
+
+ADR-020 (Pre-Warm Architecture) was revised from its initial draft to Revision 2
+following an independent architecture review that produced six findings, all of
+which were adjudicated before this session began.
+
+Six findings were resolved:
+
+1. **T-60 inconsistency** — §2 and §5 now distinguish `preWarmAt` as the
+   readiness deadline from the execution window; the scheduler must fire before
+   the deadline, not at it.
+2. **Partial-pair rollback risk** — §10 and §13 add an explicit revision guard:
+   a partial-pair repair is only permitted when the incoming revision is not
+   older than the surviving key's revision.
+3. **Missing-key stale recreation** — §13 adds a convergence paragraph defining
+   that the post-commit projection synchronization is the correction mechanism
+   and that `MISSED_WINDOW` bounds the stale window to pre-`saleStart`.
+4. **TTL not in Redis state machine** — §8 adds TTL integrity semantics
+   (persistent or inconsistent TTL = fail closed); §13 table extends the
+   invalid-state row to cover missing or inconsistent TTLs.
+5. **ADR-017 not amended (partially valid)** — Decision context now explicitly
+   states the ADR amends ADR-017 to register InventoryService as a consumer of
+   pre-warm-due events on `sale-events`.
+6. **Terminal/retryable outcomes undefined** — §10 appends an outcome
+   classification block covering terminal and retryable outcomes for transport
+   acknowledgement, explicitly excluding retry policy, backoff, and DLQ.
+
+---
+
+### 2. Files Changed
+
+- `docs/adr/20-Pre-Warm-Architecture.md` — ADR-020 Revision 2 (Decision context,
+  §2, §5, §8, §10, §13)
+
+No other file was changed in the ADR revision slice.
+
+---
+
+### 3. Verification
+
+Independent verification reviewed ADR-020 Revision 2 against all six findings
+and confirmed each was resolved. Verdict: **ADR REVISION 2 APPROVED**.
+
+No build verification is applicable; this was a documentation-only slice.
+
+---
+
+### 4. Build and Commit Status
+
+Implementation remains at `f12d67d` (unchanged). Documentation HEAD is
+`614d2cd`, already pushed to `origin/main`. The repository build baseline of
+131 Inventory tests and 16 SaleService tests remains unaffected.
+
+---
+
+### 5. Remaining Week 3 Work
+
+1. Implement the pre-warm use case against the now-approved ADR-020 Revision 2
+   contract: trigger/source, sale-timing window, authoritative snapshot load,
+   revision-compatible Lua initialization, and TTL derivation.
+2. Preserve the 131-test regression baseline through any subsequently approved
+   Week 3 slice.
+3. Reconcile `context/PROJECT_TRUTH.md`, `context/REPOSITORY_INDEX.md`, and the
+   obsolete Build Plan and Database Schema statements with current repository
+   reality.
+
+The ADR-020 architecture design is approved and complete. Kafka, Inventory REST,
+Reservation/Week 4, cross-service integration, release, and reconciliation
+implementation remain out of scope.
