@@ -2809,7 +2809,151 @@ BUILD SUCCESSFUL in 50s
 | Slice 1: Reservation domain aggregate | ✔ DONE — `713d2d2` |
 | Slice 2: Reservation persistence | ✔ DONE — `683efe4` |
 | Slice 3: REST + Command Service + Redis guard | ✔ DONE — uncommitted |
-| Slice 4: `stock_release.lua` integration | NOT STARTED |
-| Slice 5: Expiry sweep `@Scheduled` | NOT STARTED |
-| Slice 6: Kafka events | NOT STARTED |
-| Slice 7: 1500-concurrent integration test | NOT STARTED |
+| Slice 4: `stock_release.lua` integration + expiry sweep | ✔ DONE — uncommitted |
+| Slice 5: Kafka events | NOT STARTED |
+| Slice 6: 1500-concurrent integration test | NOT STARTED |
+
+---
+
+## SESSION-014
+**Date:** 2026-08-11
+**Milestone:** Week 4 — Reservation (in progress)
+**Outcome:** COMPLETE — Slice 4 implementation verified
+**Engineer:** Tarun K Y
+
+---
+
+### Objective
+
+Implement Week 4 Slice 4: integrate the pre-existing `stock-release.lua` Lua script with a
+new `StockReleasePort` adapter stack, and implement the `ReservationExpiryService` 30-second
+scheduled sweep that expires PENDING reservations past their `expiresAt` timestamp and
+best-effort releases Redis stock.
+
+---
+
+### Pre-implementation conflict resolved
+
+**CONFLICT-NEW-001 — `stock-release.lua` missing KEEPTTL**
+
+The pre-existing script contained `redis.call('SET', KEYS[1], newStock)`, which resets the
+Redis key TTL on every invocation. Because the sale's stock key is `stock:{saleId}` with a
+TTL tied to sale duration, each expiry sweep call would have silently reset that TTL,
+effectively extending the sale indefinitely in Redis.
+
+Resolution: changed to `redis.call('SET', KEYS[1], newStock, 'KEEPTTL')`.
+User explicitly approved this change before implementation began.
+
+---
+
+### Implementation summary
+
+#### Modified files
+
+| File | Change |
+|---|---|
+| `lua/stock-release.lua` | `SET KEYS[1] newStock` → `SET KEYS[1] newStock KEEPTTL` (approved CONFLICT-NEW-001) |
+| `infra/config/RedisScriptConfiguration.java` | Added `stockReleaseScript()` bean (singleton `DefaultRedisScript<Long>` loading `stock-release.lua`) |
+| `infra/config/InventoryConfiguration.java` | Added `@EnableScheduling` |
+| `application/port/ReservationRepository.java` | Added `findExpiredPending(Instant now)` |
+| `infra/persistence/SpringDataReservationRepository.java` | Added JPQL `findExpiredPending(@Param("now") Instant)` |
+| `infra/persistence/ReservationRepository.java` | Implemented `findExpiredPending(Instant)` delegating to Spring Data, mapping to domain |
+| `infra/config/RedisScriptConfigurationTest.java` | Added `loadsReleaseScriptAsSingletonWithKeepTtlAndCeiling()` |
+
+#### New production files
+
+| Class | Package | Responsibility |
+|---|---|---|
+| `StockReleasePort` | `application.port` | `release(SaleId, int quantity, int ceiling) → StockReleaseResult` |
+| `StockReleaseUnavailableException` | `application.port` | Application-owned Redis transport failure signal |
+| `StockReleaseResult` | `application` | Enum: `RELEASED`, `SALE_ENDED` |
+| `StockReleaseLuaExecutor` | `infra.redis` | Key `stock:{saleId}`, qty+ceiling args, executes `stockReleaseScript`, raw Long result |
+| `RedisStockReleaseAdapter` | `infra.redis` | Implements `StockReleasePort`; maps `≥0→RELEASED`, `-2→SALE_ENDED`, null/transport/unknown→unavailable |
+| `ReservationExpiryService` | `application` | `@Scheduled(fixedDelay=30_000)`: loads PENDING reservations expired by `clock.instant()`, calls `expire()`, saves to DB, best-effort `StockReleasePort.release()` |
+
+#### New test files
+
+| Test class | Tests |
+|---|---:|
+| `StockReleaseLuaExecutorTest` | 8 |
+| `RedisStockReleaseAdapterTest` | 6 |
+| `ReservationExpiryServiceTest` | 7 |
+| `ReservationExpiryIntegrationTest` | 5 |
+| `RedisScriptConfigurationTest` (new case) | 1 |
+| **Slice 4 new tests** | **26** |
+
+---
+
+### Architecture decisions
+
+- **DB-first expiry:** `reservation.expire()` and `reservationRepository.save()` execute
+  before `StockReleasePort.release()`. PostgreSQL transition is authoritative; Redis release
+  is advisory. A `StockReleaseUnavailableException` or `SALE_ENDED` never reverts the DB state.
+- **Best-effort Redis release:** The sweep catches and logs all exceptions from `releaseStock()`
+  without aborting the outer per-reservation loop. Other reservations in the same sweep batch
+  are unaffected.
+- **Ceiling from Product:** `totalAllocated` is read from the Product aggregate via
+  `ProductRepository` port. Preserves hexagonal boundaries; never bypasses Product ownership.
+- **No LIMIT on query:** `findExpiredPending` returns all eligible rows. If sweep latency
+  becomes measurable, add batching (ponytail comment in service).
+- **KEEPTTL contract:** `-2` (key absent) means the sale has ended or was never pre-warmed;
+  treated as `SALE_ENDED` — no error, sweep continues. Non-negative result is `RELEASED`.
+
+---
+
+### Verification results
+
+Focused Inventory build:
+
+```text
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+BUILD SUCCESSFUL in 35s
+Tests: 294 passed, 0 failed, 0 errors, 0 skipped
+```
+
+Full repository build:
+
+```text
+./gradlew clean build
+BUILD SUCCESSFUL in 52s
+Inventory: 294 passed, 0 failed, 0 errors, 0 skipped
+SaleService: 16 passed, 0 failed, 0 errors, 0 skipped
+Total: 310
+```
+
+---
+
+### Scope checks
+
+- No new Flyway migrations — PASS (V3 exists from Slice 3; no V4 added)
+- No REST changes — PASS
+- No Kafka code — PASS
+- No SaleService changes — PASS
+- `domain` packages contain no Spring/JPA/Redis/Kafka imports — PASS
+- `application` packages import only domain types and application ports — PASS
+- KEEPTTL present in `stock-release.lua` — PASS
+- `@EnableScheduling` on `InventoryConfiguration` — PASS
+- `@Scheduled(fixedDelay = 30_000)` on `ReservationExpiryService.expireReservations()` — PASS
+
+---
+
+### Documentation reconciliation
+
+| File | Change |
+|---|---|
+| `HANDOFF.md` | Slice 4 status added; next slice → Slice 5; Modified Files section updated; build counts updated |
+| `context/CURRENT_STATE.md` | Slice 4 row added; test count → 294/310; Week 4 remaining slices updated |
+| `context/SESSION_LOG.md` | This SESSION-014 append |
+
+---
+
+### Week 4 slice status
+
+| Slice | Status |
+|---|---|
+| Slice 1: Reservation domain aggregate | ✔ DONE — `713d2d2` |
+| Slice 2: Reservation persistence | ✔ DONE — `683efe4` |
+| Slice 3: REST + Command Service + Redis guard | ✔ DONE — uncommitted |
+| Slice 4: `stock_release.lua` integration + expiry sweep | ✔ DONE — uncommitted |
+| Slice 5: Kafka events | NOT STARTED |
+| Slice 6: 1500-concurrent integration test | NOT STARTED |

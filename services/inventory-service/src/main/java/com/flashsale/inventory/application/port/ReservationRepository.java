@@ -2,6 +2,8 @@ package com.flashsale.inventory.application.port;
 
 import com.flashsale.inventory.domain.aggregate.Reservation;
 import com.flashsale.inventory.domain.vo.ReservationId;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -12,6 +14,8 @@ public interface ReservationRepository {
     Optional<Reservation> findById(ReservationId id);
 
     Optional<Reservation> findByIdempotencyKey(String key);
+
+    List<Reservation> findExpiredPending(Instant now);
 
     Reservation save(Reservation reservation);
 }

@@ -2,8 +2,11 @@ package com.flashsale.inventory.infra.persistence;
 
 import com.flashsale.inventory.domain.aggregate.Reservation;
 import com.flashsale.inventory.domain.vo.ReservationId;
+import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,6 +33,16 @@ public class ReservationRepository
     public Optional<Reservation> findById(ReservationId id) {
         Objects.requireNonNull(id, "id must not be null");
         return springDataRepository.findById(id.value()).map(mapper::toDomain);
+    }
+
+    @Transactional(readOnly = true)
+    @Override
+    public List<Reservation> findExpiredPending(Instant now) {
+        Objects.requireNonNull(now, "now must not be null");
+        return springDataRepository.findExpiredPending(now)
+                .stream()
+                .map(mapper::toDomain)
+                .collect(Collectors.toList());
     }
 
     @Transactional(readOnly = true)

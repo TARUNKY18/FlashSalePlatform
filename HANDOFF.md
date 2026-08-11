@@ -12,11 +12,13 @@
 
 **Week 4, Slice 3 status:** COMPLETE — REST `POST /api/v1/reservations`, Redis duplicate guard, `ReservationCommandService`, V3 migration, 27 new tests; uncommitted; documented in SESSION-013
 
+**Week 4, Slice 4 status:** COMPLETE — `stock-release.lua` KEEPTTL fix, `StockReleasePort`, `StockReleaseUnavailableException`, `StockReleaseResult`, `StockReleaseLuaExecutor`, `RedisStockReleaseAdapter`, `ReservationExpiryService` (`@Scheduled` 30 s), `findExpiredPending` JPQL query, `stockReleaseScript` bean, `@EnableScheduling`; 26 new tests; uncommitted; documented in SESSION-014
+
 **Branch:** `main`
 
-**Latest commit:** `683efe4` (`feat(inventory): add reservation persistence`), pushed to `origin/main`
+**Latest commit:** `0b4c1c4` (`week 4 slice 3 done`), pushed to `origin/main`
 
-**Working tree:** Slice 3 implementation uncommitted (27 new files/changes). Commit before starting Slice 4.
+**Working tree:** Slice 4 implementation uncommitted (20 new/modified files). Commit before starting Slice 5.
 
 **Audience:** The senior engineer or Codex session continuing Week 4 development
 
@@ -206,16 +208,17 @@ these approved implementation commits:
 | `7b68f14` | Pre-warm use case (ADR-020 Revision 2) |
 | `713d2d2` | Reservation domain aggregate (Week 4, Slice 1) |
 | `683efe4` | Reservation persistence (Week 4, Slice 2) |
+| `0b4c1c4` | REST + Command Service + Redis guard (Week 4, Slice 3) |
 
 InventoryService currently contains:
 
-- 48 production Java files.
-- 28 test Java files (27 runnable + `InventoryInfrastructureTestSupport`).
-- 241 passing Inventory tests.
-- Three Lua scripts: `stock-decrement.lua`, `stock-projection-sync.lua`, and `stock-prewarm.lua` (integrated).
-- Two Flyway migrations: V1 (`products`, `stock_levels`), V2 (`reservations`, `stock_reservation_log`).
-- No REST endpoints, Kafka code, Redis duplicate guard, expiry sweep, release integration, or
-  reconciliation integration.
+- 66 production Java files.
+- 37 test Java files (36 runnable + `InventoryInfrastructureTestSupport`).
+- 294 passing Inventory tests (310 total including 16 SaleService).
+- Four Lua scripts: `stock-decrement.lua`, `stock-projection-sync.lua`, `stock-prewarm.lua`, and `stock-release.lua` (all integrated).
+- Three Flyway migrations: V1 (`products`, `stock_levels`), V2 (`reservations`, `stock_reservation_log`), V3 (`idempotency_key NOT NULL`).
+- REST `POST /api/v1/reservations` implemented (Slice 3, uncommitted). Expiry sweep implemented (Slice 4, uncommitted).
+- No Kafka code, reconciliation integration, or 1500-concurrent integration test.
 
 ## ✔ Skeleton
 
@@ -1019,12 +1022,45 @@ subsequently removed by the Revision 2 durable-authority implementation.
 | Integration tests | `DurableStockDecrementIntegrationTest.java`, `RedisPostgresFailoverIntegrationTest.java`, `StockProjectionSyncIntegrationTest.java`, and shared `InventoryInfrastructureTestSupport.java` run against PostgreSQL 16 and Redis 7.2 containers. |
 | Removed compatibility bridge | `StockFallbackPort`, `StockRewarmPort`, their unavailable exceptions, `PostgresStockFallbackAdapter`, `RedisStockRewarmAdapter`, and their obsolete tests were removed. |
 
+## New Slice 4 files — `stock_release.lua` integration + expiry sweep (Week 4, Slice 4 — uncommitted)
+
+### Modified existing files
+
+| File | Change |
+|---|---|
+| `services/inventory-service/src/main/resources/lua/stock-release.lua` | Fixed `redis.call('SET', KEYS[1], newStock)` → `redis.call('SET', KEYS[1], newStock, 'KEEPTTL')` (approved CONFLICT-NEW-001 resolution); preserves sale TTL on every expiry sweep invocation. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/infra/config/RedisScriptConfiguration.java` | Added `stockReleaseScript()` bean loading `lua/stock-release.lua` as singleton `DefaultRedisScript<Long>`. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/infra/config/InventoryConfiguration.java` | Added `@EnableScheduling`. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/application/port/ReservationRepository.java` | Added `findExpiredPending(Instant now)` application port method. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/SpringDataReservationRepository.java` | Added JPQL query `findExpiredPending(@Param("now") Instant)` with `status = 'PENDING' AND expiresAt <= :now`. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/ReservationRepository.java` | Implemented `findExpiredPending(Instant)` delegating to Spring Data query, mapping to domain. |
+| `services/inventory-service/src/test/java/com/flashsale/inventory/infra/config/RedisScriptConfigurationTest.java` | Added `loadsReleaseScriptAsSingletonWithKeepTtlAndCeiling()` verifying KEEPTTL, math.min, return -2 in script text. |
+
+### New production files
+
+| File | Why it exists |
+|---|---|
+| `services/inventory-service/src/main/java/com/flashsale/inventory/application/port/StockReleasePort.java` | Infrastructure-neutral port: `release(SaleId, int quantity, int ceiling) → StockReleaseResult`. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/application/port/StockReleaseUnavailableException.java` | Application-owned signal that Redis stock release had indeterminate transport outcome. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/application/StockReleaseResult.java` | Enum: `RELEASED`, `SALE_ENDED` (`-2` key missing). |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/infra/redis/StockReleaseLuaExecutor.java` | Builds `stock:{saleId}`, serializes qty and ceiling, executes `stockReleaseScript`, returns raw Long. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/infra/redis/RedisStockReleaseAdapter.java` | Implements `StockReleasePort`; maps `≥0→RELEASED`, `-2→SALE_ENDED`, null/transport/unknown→unavailable. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/application/ReservationExpiryService.java` | `@Service`; `@Scheduled(fixedDelay=30_000)`; loads expired PENDING reservations, calls `expire()`, saves to DB, best-effort Redis stock release via `StockReleasePort`. |
+
+### New test files
+
+| File | Tests |
+|---|---|
+| `services/inventory-service/src/test/java/com/flashsale/inventory/infra/redis/StockReleaseLuaExecutorTest.java` | Key format, qty/ceiling serialization, result propagation, null/zero/negative rejection (8 tests) |
+| `services/inventory-service/src/test/java/com/flashsale/inventory/infra/redis/RedisStockReleaseAdapterTest.java` | Result mappings: non-negative→RELEASED, 0→RELEASED, -2→SALE_ENDED, null→unavailable, DataAccessException→unavailable, unknown negative→unavailable (6 tests) |
+| `services/inventory-service/src/test/java/com/flashsale/inventory/application/ReservationExpiryServiceTest.java` | No-op on empty; expire+release; save-before-release order; SALE_ENDED tolerated; Redis unavailable tolerated; missing product tolerated; multiple reservations all processed (7 tests) |
+| `services/inventory-service/src/test/java/com/flashsale/inventory/integration/ReservationExpiryIntegrationTest.java` | Expired→EXPIRED status; Redis stock incremented; ceiling enforced; missing Redis key→DB still expires; future-expiry not touched (5 tests) |
+
 ## Approved resource used unchanged
 
 `services/inventory-service/src/main/resources/lua/stock-decrement.lua` existed
-before the Java integration and remains integrated. The pre-existing
-`stock-prewarm.lua`, `stock-release.lua`, and `stock-reconcile.lua` resources
-remain unintegrated.
+before the Java integration and remains integrated. `stock-release.lua` is now
+integrated (Slice 4). `stock-reconcile.lua` remains unintegrated.
 
 No SaleService file was modified.
 
@@ -1416,17 +1452,19 @@ is commit `f12d67d`, already pushed to `origin/main`.
 ## Latest successful build
 
 ```text
-Command: ./gradlew :services:inventory-service:test
-Result:  BUILD SUCCESSFUL (SESSION-012, commit 683efe4 + F-1/F-3 uncommitted)
-Time:    33 seconds
-Tests:   Inventory 241; 0 failed, 0 errors, 0 skipped
+Command: ./gradlew clean build
+Result:  BUILD SUCCESSFUL (SESSION-014, HEAD 683efe4 + Slices 3 and 4 uncommitted)
+Time:    52 seconds
+Tests:   Inventory 294; 0 failed, 0 errors, 0 skipped
+         SaleService 16; 0 failed, 0 errors, 0 skipped
+         Total 310
 ```
 
 ## Passing test inventory
 
 | Inventory test category | Passing tests |
 |---|---:|
-| Unit/property/integration (all) | 241 |
+| Unit/property/integration (all) | 294 |
 
 The complete repository build also runs 16 passing SaleService tests.
 
@@ -1485,14 +1523,13 @@ Week 3 tasks and were not introduced.
 | Slice 2: Reservation persistence | ✔ DONE | `683efe4` |
 | Adversarial review (Slice 2) — F-1 applied, F-2 rejected (optimization-only), F-3 applied | ✔ DONE | SESSION-012 |
 | Documentation reconciliation (Slice 2) | ✔ DONE | SESSION-012 |
+| Slice 3: REST + Command Service + Redis guard | ✔ DONE | uncommitted; SESSION-013 |
+| Slice 4: `stock_release.lua` integration + expiry sweep | ✔ DONE | uncommitted; SESSION-014 |
 
-**Next approved slice:** Slice 3 — REST `POST /api/v1/reservations` (idempotency key,
-controller, `ReservationCommandService`; V3 Flyway adds `NOT NULL` on `idempotency_key`).
+**Next approved slice:** Slice 5 — `StockReserved` / `ReservationExpired` Kafka events.
 
-Remaining Week 4 slices (not yet started): REST `POST /api/v1/reservations`, Redis
-`resv:lock:{userId}:{saleId}` duplicate guard, `stock_release.lua` integration,
-expiry sweep `@Scheduled`, `StockReserved`/`ReservationExpired` Kafka events,
-1500-concurrent integration test, `ReservationCommandService`.
+Remaining Week 4 slices (not yet started): `StockReserved`/`ReservationExpired` Kafka events,
+1500-concurrent integration test.
 
 ---
 

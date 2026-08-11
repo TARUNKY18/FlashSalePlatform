@@ -53,6 +53,23 @@ class RedisScriptConfigurationTest {
     }
 
     @Test
+    void loadsReleaseScriptAsSingletonWithKeepTtlAndCeiling() {
+        try (AnnotationConfigApplicationContext context =
+                     new AnnotationConfigApplicationContext(RedisScriptConfiguration.class)) {
+            RedisScript<?> first  = context.getBean("stockReleaseScript", RedisScript.class);
+            RedisScript<?> second = context.getBean("stockReleaseScript", RedisScript.class);
+
+            String scriptText = first.getScriptAsString();
+
+            assertTrue(scriptText.contains("KEEPTTL"));
+            assertTrue(scriptText.contains("math.min"));
+            assertTrue(scriptText.contains("return -2"));
+            assertEquals(Long.class, first.getResultType());
+            assertSame(first, second);
+        }
+    }
+
+    @Test
     void loadsPreWarmScriptAsSingletonWithRevisionFencedContract() {
         try (AnnotationConfigApplicationContext context =
                      new AnnotationConfigApplicationContext(RedisScriptConfiguration.class)) {

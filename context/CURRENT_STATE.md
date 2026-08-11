@@ -11,12 +11,12 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `683efe4` — `feat(inventory): add reservation persistence` |
-| Implementation commit status | All Week 3 and Week 4 Slices 1–3 implemented. Slice 3 uncommitted. HEAD: `683efe4` |
-| Build | `BUILD SUCCESSFUL` in 50s |
-| Production Java files | 60 |
-| Test classes | 33 |
-| Inventory tests | 268 passed, 0 failed, 0 errors, 0 skipped |
+| Latest commit | `0b4c1c4` — `week 4 slice 3 done` |
+| Implementation commit status | All Week 3 and Week 4 Slices 1–4 implemented. Slice 3 committed. Slice 4 uncommitted. HEAD: `0b4c1c4` |
+| Build | `BUILD SUCCESSFUL` in 52s |
+| Production Java files | 66 |
+| Test classes | 37 |
+| Inventory tests | 294 passed, 0 failed, 0 errors, 0 skipped |
 | SaleService regression | 16 passed, 0 failed, 0 errors, 0 skipped |
 
 ---
@@ -41,16 +41,19 @@
 | ✔ Pre-Warm Use Case (SESSION-009, committed `7b68f14`) | `PreWarmStockUseCase`, `StockPreWarmPort`, `RedisStockPreWarmAdapter`, `StockPreWarmLuaExecutor`, revision-fenced `stock-prewarm.lua`; `InventoryConfiguration` (`Clock` bean); `PreWarmStockResult` enum; 32 tests (+4 classes); reviewed and approved; committed |
 | ✔ Reservation Domain Aggregate (SESSION-011, committed `713d2d2`) | `Reservation` aggregate root (sealed `Status`, `create`/`reconstitute`, `confirm`/`expire`/`release`); `ReservationId`, `UserId`, `OrderId`, `Quantity`, `ReservationExpiry` value objects; `ReservationTest` (29 cases), `ReservationValueObjectTest` (18 cases); 47 new tests; reviewed and approved; committed |
 | ✔ Reservation Persistence (SESSION-012, committed `683efe4`) | V2 Flyway migration (`reservations`, `stock_reservation_log`); `ReservationJpaEntity` (`@Version`, immutable fields, `updateStatus`/`updateOrderId`); `ReservationPersistenceMapper`; `SpringDataReservationRepository`; `ReservationRepository` application port and infra adapter (load-then-update pattern for `@Version` correctness); `ReservationPersistenceMapperTest`, `ReservationRepositoryAdapterTest` (6 cases), `ReservationPersistenceIntegrationTest` (8 cases); adversarial review: F-1 applied, F-2 rejected (optimization-only), F-3 applied; 31 new tests; reviewed and approved; committed |
-| 🔶 REST + Command Service (SESSION-013, uncommitted) | V3 Flyway migration (idempotency_key NOT NULL); `Reservation.idempotencyKey` field; `ReservationJpaEntity`/`ReservationPersistenceMapper`/`ReservationRepository` updated for idempotencyKey; `ReservationDuplicateGuardPort`/`ReservationDuplicateGuardUnavailableException`; `RedisReservationDuplicateGuardAdapter` (SET NX EX 30s, `resv:lock:{userId}:{saleId}`); `CreateReservationCommand`, `ReservationCreatedResult` (sealed); `ReservationCommandService` (idempotency→Redis guard→stock decrement→persist); `ReservationController` (POST /api/v1/reservations, 201/200/409/400); `InventoryExceptionHandler`; 3 DTO records; `spring-boot-starter-validation` added; 27 new tests; BUILD SUCCESSFUL 268/268 |
+| ✔ REST + Command Service (SESSION-013, uncommitted) | V3 Flyway migration (idempotency_key NOT NULL); `Reservation.idempotencyKey` field; `ReservationJpaEntity`/`ReservationPersistenceMapper`/`ReservationRepository` updated for idempotencyKey; `ReservationDuplicateGuardPort`/`ReservationDuplicateGuardUnavailableException`; `RedisReservationDuplicateGuardAdapter` (SET NX EX 30s, `resv:lock:{userId}:{saleId}`); `CreateReservationCommand`, `ReservationCreatedResult` (sealed); `ReservationCommandService` (idempotency→Redis guard→stock decrement→persist); `ReservationController` (POST /api/v1/reservations, 201/200/409/400); `InventoryExceptionHandler`; 3 DTO records; `spring-boot-starter-validation` added; 27 new tests; BUILD SUCCESSFUL 268/268 |
+| ✔ stock_release.lua integration + expiry sweep (SESSION-014, uncommitted) | `stock-release.lua` KEEPTTL fix (approved CONFLICT-NEW-001); `StockReleasePort`, `StockReleaseUnavailableException`, `StockReleaseResult`; `StockReleaseLuaExecutor`, `RedisStockReleaseAdapter`; `stockReleaseScript` bean; `@EnableScheduling` on `InventoryConfiguration`; `findExpiredPending(Instant)` on `ReservationRepository` application port, Spring Data query, and infra adapter; `ReservationExpiryService` (`@Scheduled(fixedDelay=30_000)`); 26 new tests (unit + integration); BUILD SUCCESSFUL 294/294 Inventory, 310/310 total |
 
 ---
 
 ## Verification
 
 ```text
-./gradlew :services:inventory-service:test
-BUILD SUCCESSFUL in 33s
-241 tests passed, 0 failed, 0 errors, 0 skipped
+./gradlew clean build
+BUILD SUCCESSFUL in 52s
+Inventory: 294 tests passed, 0 failed, 0 errors, 0 skipped
+SaleService: 16 tests passed, 0 failed, 0 errors, 0 skipped
+Total: 310
 ```
 
 Inventory verification comprises unit, property, and integration tests.
@@ -98,7 +101,9 @@ audit, outbox, or Kafka table exists.
 - Synchronization failure is warned and cannot conceal the committed result.
 - The Reservation domain aggregate is implemented (domain layer only).
 - Reservation persistence is implemented (V2 Flyway migration, JPA entity, mapper, adapter).
-- Reservation REST API, Redis duplicate guard, expiry sweep, and Kafka events are not yet in scope.
+- Reservation REST API and Redis duplicate guard implemented (Slice 3, uncommitted).
+- Expiry sweep (`ReservationExpiryService`) and `stock-release.lua` integration implemented (Slice 4, uncommitted).
+- Kafka events are not yet in scope.
 
 ---
 
@@ -149,13 +154,8 @@ Week 3 is **COMPLETE**. All implementation slices committed and pushed to `origi
 
 ## Week 4 Status
 
-Week 4 is **IN PROGRESS**. Slice 1 (Reservation domain aggregate) committed at `713d2d2`. Slice 2 (Reservation persistence) committed at `683efe4` and adversarial review completed in SESSION-012.
+Week 4 is **IN PROGRESS**. Slices 1–4 complete. Slices 1 and 2 committed; Slices 3 and 4 uncommitted.
 
 Remaining slices:
-- REST `POST /api/v1/reservations` controller
-- Redis `resv:lock:{userId}:{saleId}` NX duplicate guard
-- `stock_release.lua` integration and `StockReleasePort`
-- Expiry sweep `@Scheduled`
 - `StockReserved` / `ReservationExpired` Kafka events
 - 1500-concurrent integration test (1000-unit sale)
-- `ReservationCommandService` application service

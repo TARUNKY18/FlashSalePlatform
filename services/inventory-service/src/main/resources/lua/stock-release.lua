@@ -15,5 +15,5 @@ local qty      = tonumber(ARGV[1])
 local ceiling  = tonumber(ARGV[2])
 local newStock = math.min(stock + qty, ceiling)
 
-redis.call('SET', KEYS[1], newStock)
+redis.call('SET', KEYS[1], newStock, 'KEEPTTL')
 return newStock
