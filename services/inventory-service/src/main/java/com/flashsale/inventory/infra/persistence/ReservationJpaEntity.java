@@ -40,6 +40,9 @@ public class ReservationJpaEntity {
     @Column(name = "expires_at", nullable = false, updatable = false)
     private Instant expiresAt;
 
+    @Column(name = "idempotency_key", nullable = false, updatable = false)
+    private String idempotencyKey;
+
     @Column(name = "order_id")
     private UUID orderId;
 
@@ -61,18 +64,20 @@ public class ReservationJpaEntity {
             String status,
             int quantity,
             Instant expiresAt,
+            String idempotencyKey,
             UUID orderId,
             long version
     ) {
-        this.id        = Objects.requireNonNull(id,        "id must not be null");
-        this.userId    = Objects.requireNonNull(userId,    "userId must not be null");
-        this.saleId    = Objects.requireNonNull(saleId,    "saleId must not be null");
-        this.productId = Objects.requireNonNull(productId, "productId must not be null");
-        this.status    = Objects.requireNonNull(status,    "status must not be null");
-        this.expiresAt = Objects.requireNonNull(expiresAt, "expiresAt must not be null");
-        this.quantity  = quantity;
-        this.orderId   = orderId;
-        this.version   = version;
+        this.id             = Objects.requireNonNull(id,        "id must not be null");
+        this.userId         = Objects.requireNonNull(userId,    "userId must not be null");
+        this.saleId         = Objects.requireNonNull(saleId,    "saleId must not be null");
+        this.productId      = Objects.requireNonNull(productId, "productId must not be null");
+        this.status         = Objects.requireNonNull(status,    "status must not be null");
+        this.expiresAt      = Objects.requireNonNull(expiresAt, "expiresAt must not be null");
+        this.idempotencyKey = idempotencyKey;
+        this.quantity       = quantity;
+        this.orderId        = orderId;
+        this.version        = version;
     }
 
     public UUID getId() {
@@ -101,6 +106,10 @@ public class ReservationJpaEntity {
 
     public Instant getExpiresAt() {
         return expiresAt;
+    }
+
+    public String getIdempotencyKey() {
+        return idempotencyKey;
     }
 
     public UUID getOrderId() {

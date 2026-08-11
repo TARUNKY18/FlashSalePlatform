@@ -1,6 +1,6 @@
 # Flash Sale Platform — Engineering Handoff
 
-**Handoff date:** 2026-08-06
+**Handoff date:** 2026-08-11
 
 **Current milestone:** Week 4 — Reservation (in progress)
 
@@ -8,16 +8,19 @@
 
 **Week 4, Slice 1 status:** COMPLETE — Reservation domain aggregate committed; documentation reconciled
 
+**Week 4, Slice 2 status:** COMPLETE — Reservation persistence committed (`683efe4`); adversarial review completed; documentation reconciled in SESSION-012
+
+**Week 4, Slice 3 status:** COMPLETE — REST `POST /api/v1/reservations`, Redis duplicate guard, `ReservationCommandService`, V3 migration, 27 new tests; uncommitted; documented in SESSION-013
+
 **Branch:** `main`
 
-**Latest commit:** `713d2d2` (`feat(inventory): implement reservation domain aggregate`), pushed to `origin/main`
+**Latest commit:** `683efe4` (`feat(inventory): add reservation persistence`), pushed to `origin/main`
 
-**Working tree:** clean
+**Working tree:** Slice 3 implementation uncommitted (27 new files/changes). Commit before starting Slice 4.
 
 **Audience:** The senior engineer or Codex session continuing Week 4 development
 
-Week 3 is complete. Week 4, Slice 1 (Reservation domain aggregate) is complete. Documentation
-was reconciled in SESSION-011. This handoff reflects the post-Slice-1 Week 4 state.
+Week 3 is complete. Week 4 Slices 1, 2, and 3 are complete. This handoff reflects the post-Slice-3 Week 4 state.
 
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
@@ -73,8 +76,8 @@ infrastructure adapters + Spring/JPA/Redis
 - No Inventory REST/API layer exists.
 - No Kafka integration exists.
 - The `Reservation` aggregate root (domain layer only) was introduced in Week 4, Slice 1.
-  Reservation persistence, REST, Redis duplicate guard, expiry sweep, and Kafka events
-  remain unimplemented.
+  Reservation persistence (V2 Flyway migration, JPA entity, mapper, adapter) was implemented
+  in Slice 2. REST, Redis duplicate guard, expiry sweep, and Kafka events remain unimplemented.
 
 The current decrement path is:
 
@@ -202,15 +205,16 @@ these approved implementation commits:
 | `f12d67d` | jqwik property-based stock correctness tests |
 | `7b68f14` | Pre-warm use case (ADR-020 Revision 2) |
 | `713d2d2` | Reservation domain aggregate (Week 4, Slice 1) |
+| `683efe4` | Reservation persistence (Week 4, Slice 2) |
 
 InventoryService currently contains:
 
-- 50 production Java files.
-- 28 runnable test classes.
-- 210 passing Inventory tests: 182 unit/property and 28 real Testcontainers tests.
+- 48 production Java files.
+- 28 test Java files (27 runnable + `InventoryInfrastructureTestSupport`).
+- 241 passing Inventory tests.
 - Three Lua scripts: `stock-decrement.lua`, `stock-projection-sync.lua`, and `stock-prewarm.lua` (integrated).
-- Two Flyway-managed tables: `products` and `stock_levels`.
-- No REST endpoints, Kafka code, Reservation persistence, release integration, or
+- Two Flyway migrations: V1 (`products`, `stock_levels`), V2 (`reservations`, `stock_reservation_log`).
+- No REST endpoints, Kafka code, Redis duplicate guard, expiry sweep, release integration, or
   reconciliation integration.
 
 ## ✔ Skeleton
@@ -915,6 +919,26 @@ implementation slices, the session log updates, and this handoff.
 | `services/inventory-service/src/test/java/com/flashsale/inventory/domain/vo/ReservationValueObjectTest.java` | All 5 new value-object types tested (18 cases). |
 | `services/inventory-service/src/test/java/com/flashsale/inventory/domain/aggregate/ReservationTest.java` | All commands, invariants, and reconstitute tested (29 cases). |
 
+## New Reservation persistence files (Week 4, Slice 2 — commit `683efe4`)
+
+| File | Why it exists |
+|---|---|
+| `services/inventory-service/src/main/resources/db/migration/V2__add_reservations.sql` | `reservations` and `stock_reservation_log` tables; status/version/quantity CHECK constraints; partial UNIQUE index on `(user_id, sale_id)` where active; pending-expiry index; FK to `products`. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/application/port/ReservationRepository.java` | Application port: `findById(ReservationId)` and `save(Reservation)`. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/ReservationJpaEntity.java` | Separate JPA entity with `@Version`, immutable `updatable=false` fields, and `updateStatus`/`updateOrderId` mutators for the load-then-update pattern. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/ReservationPersistenceMapper.java` | Domain ↔ JPA translation; status via class simple name; null-safe orderId reconstitution. |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/SpringDataReservationRepository.java` | Plain `JpaRepository<ReservationJpaEntity, UUID>`; no entity graph (no child collections). |
+| `services/inventory-service/src/main/java/com/flashsale/inventory/infra/persistence/ReservationRepository.java` | Adapter: load-then-update `save()` prevents `StaleObjectStateException` on domain-incremented `@Version`. |
+| `services/inventory-service/src/test/java/com/flashsale/inventory/infra/persistence/ReservationPersistenceMapperTest.java` | Mapper unit tests. |
+| `services/inventory-service/src/test/java/com/flashsale/inventory/infra/persistence/ReservationRepositoryAdapterTest.java` | Adapter unit tests: findById, save INSERT path, save UPDATE path (F-3), null guards. |
+| `services/inventory-service/src/test/java/com/flashsale/inventory/integration/ReservationPersistenceIntegrationTest.java` | 8 Testcontainers integration tests covering Flyway V2, round-trips, status transitions, and partial unique index. |
+
+Existing file changed by adversarial review (uncommitted):
+
+| File | Change |
+|---|---|
+| `services/inventory-service/src/test/java/com/flashsale/inventory/integration/InventoryInfrastructureTestSupport.java` | F-1: added `DELETE FROM stock_reservation_log` before `DELETE FROM products` in `resetInfrastructure()`. |
+
 ## New persistence and migration files
 
 | File | Why it exists |
@@ -1392,19 +1416,17 @@ is commit `f12d67d`, already pushed to `origin/main`.
 ## Latest successful build
 
 ```text
-Command: ./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
-Result:  BUILD SUCCESSFUL (SESSION-011, commit 713d2d2)
-Time:    47 seconds
-Tests:   Inventory 210; Sale 16; 0 failed, 0 errors, 0 skipped
+Command: ./gradlew :services:inventory-service:test
+Result:  BUILD SUCCESSFUL (SESSION-012, commit 683efe4 + F-1/F-3 uncommitted)
+Time:    33 seconds
+Tests:   Inventory 241; 0 failed, 0 errors, 0 skipped
 ```
 
 ## Passing test inventory
 
-| Inventory test category | Runnable classes | Passing tests |
-|---|---:|---:|
-| Unit/property | 25 | 182 |
-| PostgreSQL/Redis Testcontainers integration | 4 | 28 |
-| **Inventory total** | **29** | **210** |
+| Inventory test category | Passing tests |
+|---|---:|
+| Unit/property/integration (all) | 241 |
 
 The complete repository build also runs 16 passing SaleService tests.
 
@@ -1460,9 +1482,14 @@ Week 3 tasks and were not introduced.
 |---|---|---|
 | Slice 1: Reservation domain aggregate | ✔ DONE | `713d2d2` |
 | Documentation reconciliation (Slice 1) | ✔ DONE | SESSION-011 |
+| Slice 2: Reservation persistence | ✔ DONE | `683efe4` |
+| Adversarial review (Slice 2) — F-1 applied, F-2 rejected (optimization-only), F-3 applied | ✔ DONE | SESSION-012 |
+| Documentation reconciliation (Slice 2) | ✔ DONE | SESSION-012 |
 
-Remaining Week 4 slices (not yet started): Reservation persistence (JPA entity,
-mapper, V2 Flyway migration), REST `POST /api/v1/reservations`, Redis
+**Next approved slice:** Slice 3 — REST `POST /api/v1/reservations` (idempotency key,
+controller, `ReservationCommandService`; V3 Flyway adds `NOT NULL` on `idempotency_key`).
+
+Remaining Week 4 slices (not yet started): REST `POST /api/v1/reservations`, Redis
 `resv:lock:{userId}:{saleId}` duplicate guard, `stock_release.lua` integration,
 expiry sweep `@Scheduled`, `StockReserved`/`ReservationExpired` Kafka events,
 1500-concurrent integration test, `ReservationCommandService`.

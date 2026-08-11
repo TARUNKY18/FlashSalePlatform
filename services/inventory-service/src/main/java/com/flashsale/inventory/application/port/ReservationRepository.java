@@ -11,5 +11,7 @@ public interface ReservationRepository {
 
     Optional<Reservation> findById(ReservationId id);
 
+    Optional<Reservation> findByIdempotencyKey(String key);
+
     Reservation save(Reservation reservation);
 }

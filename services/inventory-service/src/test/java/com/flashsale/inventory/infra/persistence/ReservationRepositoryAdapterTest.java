@@ -90,7 +90,8 @@ class ReservationRepositoryAdapterTest {
                 new ReservationExpiry(Instant.parse("2099-01-01T00:00:00Z")),
                 new Status.Confirmed(),
                 OrderId.of(UUID.randomUUID()),
-                1L
+                1L,
+                null
         );
         Reservation reconstituted = stubDomain();
         when(springDataRepository.findById(RESERVATION_UUID)).thenReturn(Optional.of(existing));
@@ -116,6 +117,27 @@ class ReservationRepositoryAdapterTest {
 
     // --- helpers ---
 
+    @Test
+    void findByIdempotencyKeyDelegatesToSpringData() {
+        String iKey = "test-key";
+        ReservationJpaEntity entity = stubEntity();
+        Reservation aggregate = stubDomain();
+        when(springDataRepository.findByIdempotencyKey(iKey)).thenReturn(Optional.of(entity));
+        when(mapper.toDomain(entity)).thenReturn(aggregate);
+
+        Reservation loaded = repository.findByIdempotencyKey(iKey).orElseThrow();
+
+        assertSame(aggregate, loaded);
+    }
+
+    @Test
+    void findByIdempotencyKeyReturnsEmptyWhenNotFound() {
+        when(springDataRepository.findByIdempotencyKey("missing")).thenReturn(Optional.empty());
+
+        assertTrue(repository.findByIdempotencyKey("missing").isEmpty());
+        verifyNoInteractions(mapper);
+    }
+
     private ReservationJpaEntity stubEntity() {
         return new ReservationJpaEntity(
                 RESERVATION_UUID,
@@ -125,6 +147,7 @@ class ReservationRepositoryAdapterTest {
                 "PENDING",
                 1,
                 Instant.parse("2099-01-01T00:00:00Z"),
+                null,
                 null,
                 0L
         );
@@ -140,7 +163,8 @@ class ReservationRepositoryAdapterTest {
                 new ReservationExpiry(Instant.parse("2099-01-01T00:00:00Z")),
                 new Status.Pending(),
                 null,
-                0L
+                0L,
+                null
         );
     }
 }

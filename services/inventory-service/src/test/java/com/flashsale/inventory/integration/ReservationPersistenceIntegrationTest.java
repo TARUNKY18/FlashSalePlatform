@@ -147,16 +147,37 @@ class ReservationPersistenceIntegrationTest extends InventoryInfrastructureTestS
                 reservationRepository.findById(saved.id()).orElseThrow().status());
     }
 
+    @Test
+    void findByIdempotencyKeyReturnsReservationWhenExists() {
+        String iKey = UUID.randomUUID().toString();
+        Reservation created = newPendingReservation(UUID.randomUUID(), UUID.randomUUID(), iKey);
+        reservationRepository.save(created);
+
+        Reservation loaded = reservationRepository.findByIdempotencyKey(iKey).orElseThrow();
+
+        assertEquals(iKey, loaded.idempotencyKey());
+    }
+
+    @Test
+    void findByIdempotencyKeyReturnsEmptyWhenNotFound() {
+        assertTrue(reservationRepository.findByIdempotencyKey("no-such-key").isEmpty());
+    }
+
     // --- helpers ---
 
     private Reservation newPendingReservation(UUID userId, UUID saleId) {
+        return newPendingReservation(userId, saleId, UUID.randomUUID().toString());
+    }
+
+    private Reservation newPendingReservation(UUID userId, UUID saleId, String idempotencyKey) {
         return Reservation.create(
                 UserId.of(userId),
                 SaleId.of(saleId),
                 PRODUCT_ID,
                 Quantity.one(),
                 new ReservationExpiry(EXPIRES_AT),
-                Instant.now()
+                Instant.now(),
+                idempotencyKey
         );
     }
 }

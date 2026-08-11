@@ -2606,3 +2606,210 @@ No existing files were modified. Scope check: only the 8 listed files created.
 | Slice 9: `ReservationCommandService` | NOT STARTED |
 
 Week 3: **COMPLETE**.
+
+---
+
+## SESSION-012
+**Date:** 2026-08-11
+**Milestone:** Week 4 — Reservation Persistence (Slice 2)
+**Outcome:** COMPLETE
+**Engineer:** Tarun K Y
+**Branch:** `main`
+**Implementation commit:** `683efe4` (`feat(inventory): add reservation persistence`)
+**Documentation commit:** pending (this reconciliation session)
+
+---
+
+### Objective
+
+Implement Reservation persistence as Week 4, Slice 2: V2 Flyway migration,
+JPA entity, persistence mapper, Spring Data repository, application port,
+infrastructure adapter, and tests. Then perform adversarial review and apply
+accepted findings.
+
+---
+
+### New production files (commit `683efe4`)
+
+| File | Responsibility |
+|---|---|
+| `db/migration/V2__add_reservations.sql` | `reservations` and `stock_reservation_log` tables; CHECK constraints; partial UNIQUE index `idx_reservations_user_sale_active`; pending-expiry index |
+| `application/port/ReservationRepository.java` | Application port: `findById(ReservationId)`, `save(Reservation)` |
+| `infra/persistence/ReservationJpaEntity.java` | Separate JPA entity; `@Version`; `updatable=false` on immutable fields; `updateStatus`/`updateOrderId` package-private mutators |
+| `infra/persistence/ReservationPersistenceMapper.java` | Domain ↔ JPA translation; status via class simple name; null-safe orderId |
+| `infra/persistence/SpringDataReservationRepository.java` | Plain `JpaRepository<ReservationJpaEntity, UUID>` |
+| `infra/persistence/ReservationRepository.java` (adapter) | Load-then-update `save()` to avoid `@Version` conflict on domain-incremented version |
+
+---
+
+### New test files (commit `683efe4`)
+
+| Test class | Tests | Coverage |
+|---|---:|---|
+| `ReservationPersistenceMapperTest` | — | mapper round-trips, null orderId |
+| `ReservationRepositoryAdapterTest` | 6 | load, missing, save (INSERT path), save (UPDATE path — F-3), null guards |
+| `ReservationPersistenceIntegrationTest` | 8 | Flyway V2, round-trip, all 4 status transitions, unique index enforcement, expired-unblocks-new |
+
+---
+
+### Adversarial review
+
+| Finding | Classification | Action |
+|---|---|---|
+| F-1: `resetInfrastructure` missing `DELETE FROM stock_reservation_log` | VALID | Applied — prevents FK violation when stock log write path is added |
+| F-2: INSERT path 3 DB roundtrips (SELECT + SELECT + INSERT) | VALID | **Rejected** — optimization-only; no correctness bug; no contract requirement; outside approved scope |
+| F-3: No unit test for UPDATE path in adapter | VALID | Applied — `saveUpdatesExistingEntityInPlaceWhenFoundById` added |
+| F-4: nullable `idempotency_key` UNIQUE constraint | PARTIALLY VALID | No action — intentional scope deferral to Slice 3 |
+
+---
+
+### Verification
+
+```bash
+./gradlew :services:inventory-service:test
+BUILD SUCCESSFUL in 33s
+241 tests passed, 0 failed, 0 errors, 0 skipped
+```
+
+No production files outside approved Slice 2 scope were modified.
+Reservation domain aggregate (`Reservation.java`) unchanged.
+
+---
+
+### Documentation reconciliation (this session)
+
+| File | Change |
+|---|---|
+| `context/CURRENT_STATE.md` | Latest commit → `683efe4`; counts updated; Slice 2 row added to Completed Work; Database section updated; Architecture Locked updated; Week 4 Status updated |
+| `HANDOFF.md` | Slice 2 status → COMPLETE; latest commit updated; counts updated; Slice 2 added to Week 4 Completed Slices; remaining slices list updated; new production/test files listed |
+| `context/PROJECT_TRUTH.md` | InventoryService row and Migrations row updated |
+| `context/SESSION_LOG.md` | This SESSION-012 append |
+
+---
+
+### Week 4 slice status
+
+| Slice | Status |
+|---|---|
+| Slice 1: Reservation domain aggregate | ✔ DONE — `713d2d2` |
+| Slice 2: Reservation persistence | ✔ DONE — `683efe4` |
+| Slice 3: REST `POST /api/v1/reservations` | NOT STARTED |
+| Slice 4: Redis duplicate guard | NOT STARTED |
+| Slice 5: `stock_release.lua` integration | NOT STARTED |
+| Slice 6: Expiry sweep `@Scheduled` | NOT STARTED |
+| Slice 7: Kafka events | NOT STARTED |
+| Slice 8: 1500-concurrent integration test | NOT STARTED |
+| Slice 9: `ReservationCommandService` | NOT STARTED |
+
+---
+
+## SESSION-013
+**Date:** 2026-08-11
+**Milestone:** Week 4, Slice 3 — REST `POST /api/v1/reservations` + Command Service + Redis Duplicate Guard
+**Outcome:** COMPLETE (uncommitted working tree)
+**Engineer:** Tarun K Y
+
+---
+
+### Objective
+
+Implement Week 4 Slice 3: `POST /api/v1/reservations` endpoint, `ReservationCommandService`, Redis SET NX EX duplicate guard, V3 Flyway migration (idempotency_key NOT NULL), and all specified tests. Scope boundary: no SALE_NOT_ACTIVE, no Lua scripts, no expiry sweep, no Kafka events.
+
+---
+
+### Implementation
+
+#### New files (production)
+
+| File | Purpose |
+|---|---|
+| `db/migration/V3__reservation_idempotency_key_not_null.sql` | Makes `idempotency_key NOT NULL` |
+| `application/CreateReservationCommand.java` | Command record (idempotencyKey, userId, saleId, productId, quantity) |
+| `application/ReservationCreatedResult.java` | Sealed interface (Created, IdempotentReplay, SoldOut, DuplicateReservation) |
+| `application/ReservationCommandService.java` | Orchestrates idempotency check → Redis NX guard → stock decrement → persist |
+| `application/port/ReservationDuplicateGuardPort.java` | Port: `boolean tryAcquire(UserId, SaleId)` |
+| `application/port/ReservationDuplicateGuardUnavailableException.java` | Signal for Redis transport indeterminate |
+| `infra/redis/RedisReservationDuplicateGuardAdapter.java` | SET NX EX 30s; key `resv:lock:{userId}:{saleId}`; falls through on unavailability |
+| `api/ReservationController.java` | `POST /api/v1/reservations`; 201/200/409/400 |
+| `api/InventoryExceptionHandler.java` | `@RestControllerAdvice`; SOLD_OUT/DUPLICATE_RESERVATION/MISSING_HEADER/VALIDATION_FAILED |
+| `api/dto/CreateReservationRequest.java` | Bean-validated request record |
+| `api/dto/ReservationResponse.java` | Response record |
+| `api/dto/ErrorResponse.java` | Error record |
+
+#### Modified files (production)
+
+| File | Change |
+|---|---|
+| `domain/aggregate/Reservation.java` | Added `idempotencyKey` field; 7-param `create()`; `reconstitute()` updated to 10 params |
+| `infra/persistence/ReservationJpaEntity.java` | Added `idempotency_key` column (nullable=false, updatable=false) |
+| `infra/persistence/ReservationPersistenceMapper.java` | Maps `idempotencyKey` in both directions |
+| `application/port/ReservationRepository.java` | Added `findByIdempotencyKey(String)` |
+| `infra/persistence/SpringDataReservationRepository.java` | Added `findByIdempotencyKey` Spring Data method |
+| `infra/persistence/ReservationRepository.java` (adapter) | Implements `findByIdempotencyKey` |
+| `build.gradle` | Added `spring-boot-starter-validation` |
+
+#### New test files
+
+| File | Coverage |
+|---|---|
+| `application/ReservationCommandServiceTest.java` | Happy path, idempotent replay, sold-out, Redis duplicate, Redis unavailable fall-through |
+| `api/ReservationControllerTest.java` | 201, 200 replay, 400 missing header, 400 validation, 409 SOLD_OUT, 409 DUPLICATE_RESERVATION |
+| `infra/redis/RedisReservationDuplicateGuardAdapterTest.java` | setIfAbsent true/false, null result, connection failure, timeout, key format |
+| `integration/ReservationCommandIntegrationTest.java` | First create, idempotent replay, two users same sale, V3 NOT NULL verified |
+
+#### Modified test files
+
+| File | Change |
+|---|---|
+| `domain/aggregate/ReservationTest.java` | Added null as 10th param to `reconstitute()` calls |
+| `infra/persistence/ReservationPersistenceMapperTest.java` | Updated `reconstitute()`/`ReservationJpaEntity()` calls; added idempotencyKey mapping tests |
+| `infra/persistence/ReservationRepositoryAdapterTest.java` | Updated stubs; added `findByIdempotencyKey` tests |
+| `integration/ReservationPersistenceIntegrationTest.java` | `newPendingReservation()` uses 7-param `create()`; added `findByIdempotencyKey` tests |
+
+---
+
+### Build gate
+
+```text
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+BUILD SUCCESSFUL in 50s
+268 tests passed, 0 failed, 0 errors, 0 skipped
+```
+
+---
+
+### Scope verification
+
+- No Spring/JPA imports in domain — PASS
+- No Kafka/Lua/expiry sweep — PASS
+- No infra imports in application layer — PASS
+- Redis key shape `resv:lock:{userId}:{saleId}` — PASS
+- Lua files unchanged — PASS
+- V3 migration only new SQL — PASS
+- SaleService untouched — PASS
+- V1/V2 migrations unchanged — PASS
+- `StockCounterService` unchanged — PASS
+
+---
+
+### Documentation reconciliation
+
+| File | Change |
+|---|---|
+| `HANDOFF.md` | Slice 3 status → COMPLETE; working tree note updated |
+| `context/CURRENT_STATE.md` | Counts updated; Slice 3 row added; Database section updated |
+| `context/SESSION_LOG.md` | This SESSION-013 append |
+
+---
+
+### Week 4 slice status
+
+| Slice | Status |
+|---|---|
+| Slice 1: Reservation domain aggregate | ✔ DONE — `713d2d2` |
+| Slice 2: Reservation persistence | ✔ DONE — `683efe4` |
+| Slice 3: REST + Command Service + Redis guard | ✔ DONE — uncommitted |
+| Slice 4: `stock_release.lua` integration | NOT STARTED |
+| Slice 5: Expiry sweep `@Scheduled` | NOT STARTED |
+| Slice 6: Kafka events | NOT STARTED |
+| Slice 7: 1500-concurrent integration test | NOT STARTED |

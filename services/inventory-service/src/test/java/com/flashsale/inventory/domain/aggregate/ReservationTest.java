@@ -220,7 +220,7 @@ class ReservationTest {
         ReservationId id = ReservationId.generate();
         Reservation r = Reservation.reconstitute(
                 id, USER_ID, SALE_ID, PRODUCT_ID, QTY, VALID_EXPIRY,
-                new Reservation.Status.Confirmed(), ORDER_ID, 5L
+                new Reservation.Status.Confirmed(), ORDER_ID, 5L, null
         );
 
         assertEquals(id,           r.id());
@@ -238,7 +238,7 @@ class ReservationTest {
     void reconstituteRejectsNullId() {
         assertThrows(NullPointerException.class, () ->
                 Reservation.reconstitute(null, USER_ID, SALE_ID, PRODUCT_ID, QTY,
-                        VALID_EXPIRY, new Reservation.Status.Pending(), null, 0L));
+                        VALID_EXPIRY, new Reservation.Status.Pending(), null, 0L, null));
     }
 
     @Test
@@ -246,6 +246,6 @@ class ReservationTest {
         assertThrows(IllegalArgumentException.class, () ->
                 Reservation.reconstitute(ReservationId.generate(), USER_ID, SALE_ID,
                         PRODUCT_ID, QTY, VALID_EXPIRY,
-                        new Reservation.Status.Pending(), null, -1L));
+                        new Reservation.Status.Pending(), null, -1L, null));
     }
 }

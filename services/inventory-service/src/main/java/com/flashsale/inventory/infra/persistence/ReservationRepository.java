@@ -32,6 +32,15 @@ public class ReservationRepository
         return springDataRepository.findById(id.value()).map(mapper::toDomain);
     }
 
+    @Transactional(readOnly = true)
+    @Override
+    public Optional<Reservation> findByIdempotencyKey(String key) {
+        if (key == null) {
+            return Optional.empty();
+        }
+        return springDataRepository.findByIdempotencyKey(key).map(mapper::toDomain);
+    }
+
     /**
      * Saves the aggregate and returns the state after JPA has applied versioning.
      * For existing aggregates, loads the managed entity and updates mutable fields

@@ -28,6 +28,7 @@ public class ReservationPersistenceMapper {
                 reservation.status().getClass().getSimpleName().toUpperCase(),
                 reservation.quantity().value(),
                 reservation.expiry().expiresAt(),
+                reservation.idempotencyKey(),
                 reservation.orderId() != null ? reservation.orderId().value() : null,
                 reservation.version()
         );
@@ -56,7 +57,8 @@ public class ReservationPersistenceMapper {
                 new ReservationExpiry(entity.getExpiresAt()),
                 status,
                 orderId,
-                entity.getVersion()
+                entity.getVersion(),
+                entity.getIdempotencyKey()
         );
     }
 }

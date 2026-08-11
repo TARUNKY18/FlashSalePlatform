@@ -85,7 +85,8 @@ class ReservationPersistenceMapperTest {
                 new ReservationExpiry(EXPIRES_AT),
                 status,
                 null,
-                0L
+                0L,
+                null
         );
 
         String serialized = mapper.toJpaEntity(reservation).getStatus();
@@ -136,6 +137,34 @@ class ReservationPersistenceMapperTest {
     }
 
     @Test
+    void mapsIdempotencyKeyToJpaEntity() {
+        String iKey = "test-idempotency-key";
+        Reservation r = Reservation.reconstitute(
+                ReservationId.of(RESERVATION_UUID),
+                UserId.of(USER_UUID),
+                SaleId.of(SALE_UUID),
+                ProductId.of(PRODUCT_UUID),
+                Quantity.of(1),
+                new ReservationExpiry(EXPIRES_AT),
+                new Status.Pending(),
+                null,
+                0L,
+                iKey
+        );
+        assertEquals(iKey, mapper.toJpaEntity(r).getIdempotencyKey());
+    }
+
+    @Test
+    void mapsIdempotencyKeyFromJpaEntity() {
+        String iKey = "test-idempotency-key";
+        ReservationJpaEntity entity = new ReservationJpaEntity(
+                RESERVATION_UUID, USER_UUID, SALE_UUID, PRODUCT_UUID,
+                "PENDING", 1, EXPIRES_AT, iKey, null, 0L
+        );
+        assertEquals(iKey, mapper.toDomain(entity).idempotencyKey());
+    }
+
+    @Test
     void rejectsNullReservation() {
         assertThrows(NullPointerException.class, () -> mapper.toJpaEntity(null));
     }
@@ -157,7 +186,8 @@ class ReservationPersistenceMapperTest {
                 new ReservationExpiry(EXPIRES_AT),
                 new Status.Pending(),
                 null,
-                0L
+                0L,
+                null
         );
     }
 
@@ -171,7 +201,8 @@ class ReservationPersistenceMapperTest {
                 new ReservationExpiry(EXPIRES_AT),
                 new Status.Confirmed(),
                 OrderId.of(ORDER_UUID),
-                1L
+                1L,
+                null
         );
     }
 
@@ -184,6 +215,7 @@ class ReservationPersistenceMapperTest {
                 status,
                 2,
                 EXPIRES_AT,
+                null,
                 orderId,
                 version
         );

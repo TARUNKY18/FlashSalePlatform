@@ -1,7 +1,7 @@
 # CURRENT_STATE.md
 **Milestone:** Week 4 — Reservation (in progress)
 **Status:** 🟡 IN PROGRESS
-**Date:** 2026-08-06
+**Date:** 2026-08-11
 **Engineer:** Tarun K Y
 
 ---
@@ -11,12 +11,12 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `713d2d2` — `feat(inventory): implement reservation domain aggregate` |
-| Implementation commit status | All Week 3 and Week 4 Slice 1 committed. Working tree: clean. HEAD: `713d2d2` |
-| Build | `BUILD SUCCESSFUL` in 47s |
-| Production Java files | 50 |
-| Test classes | 28 |
-| Inventory tests | 210 passed, 0 failed, 0 errors, 0 skipped |
+| Latest commit | `683efe4` — `feat(inventory): add reservation persistence` |
+| Implementation commit status | All Week 3 and Week 4 Slices 1–3 implemented. Slice 3 uncommitted. HEAD: `683efe4` |
+| Build | `BUILD SUCCESSFUL` in 50s |
+| Production Java files | 60 |
+| Test classes | 33 |
+| Inventory tests | 268 passed, 0 failed, 0 errors, 0 skipped |
 | SaleService regression | 16 passed, 0 failed, 0 errors, 0 skipped |
 
 ---
@@ -40,29 +40,33 @@
 | ✔ ADR-020 Pre-Warm Architecture (Revision 2) | Six architecture-review findings adjudicated and resolved; governing architecture approved; no production or test code changed |
 | ✔ Pre-Warm Use Case (SESSION-009, committed `7b68f14`) | `PreWarmStockUseCase`, `StockPreWarmPort`, `RedisStockPreWarmAdapter`, `StockPreWarmLuaExecutor`, revision-fenced `stock-prewarm.lua`; `InventoryConfiguration` (`Clock` bean); `PreWarmStockResult` enum; 32 tests (+4 classes); reviewed and approved; committed |
 | ✔ Reservation Domain Aggregate (SESSION-011, committed `713d2d2`) | `Reservation` aggregate root (sealed `Status`, `create`/`reconstitute`, `confirm`/`expire`/`release`); `ReservationId`, `UserId`, `OrderId`, `Quantity`, `ReservationExpiry` value objects; `ReservationTest` (29 cases), `ReservationValueObjectTest` (18 cases); 47 new tests; reviewed and approved; committed |
+| ✔ Reservation Persistence (SESSION-012, committed `683efe4`) | V2 Flyway migration (`reservations`, `stock_reservation_log`); `ReservationJpaEntity` (`@Version`, immutable fields, `updateStatus`/`updateOrderId`); `ReservationPersistenceMapper`; `SpringDataReservationRepository`; `ReservationRepository` application port and infra adapter (load-then-update pattern for `@Version` correctness); `ReservationPersistenceMapperTest`, `ReservationRepositoryAdapterTest` (6 cases), `ReservationPersistenceIntegrationTest` (8 cases); adversarial review: F-1 applied, F-2 rejected (optimization-only), F-3 applied; 31 new tests; reviewed and approved; committed |
+| 🔶 REST + Command Service (SESSION-013, uncommitted) | V3 Flyway migration (idempotency_key NOT NULL); `Reservation.idempotencyKey` field; `ReservationJpaEntity`/`ReservationPersistenceMapper`/`ReservationRepository` updated for idempotencyKey; `ReservationDuplicateGuardPort`/`ReservationDuplicateGuardUnavailableException`; `RedisReservationDuplicateGuardAdapter` (SET NX EX 30s, `resv:lock:{userId}:{saleId}`); `CreateReservationCommand`, `ReservationCreatedResult` (sealed); `ReservationCommandService` (idempotency→Redis guard→stock decrement→persist); `ReservationController` (POST /api/v1/reservations, 201/200/409/400); `InventoryExceptionHandler`; 3 DTO records; `spring-boot-starter-validation` added; 27 new tests; BUILD SUCCESSFUL 268/268 |
 
 ---
 
 ## Verification
 
 ```text
-./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
-BUILD SUCCESSFUL in 47s
-210 tests passed, 0 failed, 0 errors, 0 skipped
+./gradlew :services:inventory-service:test
+BUILD SUCCESSFUL in 33s
+241 tests passed, 0 failed, 0 errors, 0 skipped
 ```
 
-Inventory verification comprises 182 unit/property tests and 28 real
-PostgreSQL/Redis Testcontainers tests. jqwik is present only on the Inventory
-test runtime classpath and is absent from its production runtime classpath.
+Inventory verification comprises unit, property, and integration tests.
+jqwik is present only on the Inventory test runtime classpath and is absent
+from its production runtime classpath.
 
 ---
 
 ## Database
 
-`inventory_db` contains only `products` and Product-owned `stock_levels`.
-`(product_id, sale_id)` is unique. The Reservation domain aggregate exists in
-the domain layer only; no `reservations` table or Flyway migration has been
-added yet. No release, reconciliation, audit, outbox, or Kafka table exists.
+`inventory_db` contains `products`, Product-owned `stock_levels`,
+`reservations`, and `stock_reservation_log`. V1 created `products` and
+`stock_levels`; V2 added `reservations` (partial unique index on
+`(user_id, sale_id)` where `status IN ('PENDING','CONFIRMED')`) and
+`stock_reservation_log` (FK to `products`). V3 enforces `idempotency_key NOT NULL`. No release, reconciliation,
+audit, outbox, or Kafka table exists.
 
 ---
 
@@ -93,7 +97,8 @@ added yet. No release, reconciliation, audit, outbox, or Kafka table exists.
 - Missing stock remains missing; revisionless stock is atomically invalidated.
 - Synchronization failure is warned and cannot conceal the committed result.
 - The Reservation domain aggregate is implemented (domain layer only).
-- Reservation persistence, REST API, Redis duplicate guard, expiry sweep, and Kafka events are not yet in scope.
+- Reservation persistence is implemented (V2 Flyway migration, JPA entity, mapper, adapter).
+- Reservation REST API, Redis duplicate guard, expiry sweep, and Kafka events are not yet in scope.
 
 ---
 
@@ -144,10 +149,9 @@ Week 3 is **COMPLETE**. All implementation slices committed and pushed to `origi
 
 ## Week 4 Status
 
-Week 4 is **IN PROGRESS**. Slice 1 (Reservation domain aggregate) committed at `713d2d2` and documentation reconciled in SESSION-011.
+Week 4 is **IN PROGRESS**. Slice 1 (Reservation domain aggregate) committed at `713d2d2`. Slice 2 (Reservation persistence) committed at `683efe4` and adversarial review completed in SESSION-012.
 
 Remaining slices:
-- Reservation persistence (JPA entity, mapper, V2 Flyway migration for `reservations` + `stock_reservation_log`)
 - REST `POST /api/v1/reservations` controller
 - Redis `resv:lock:{userId}:{saleId}` NX duplicate guard
 - `stock_release.lua` integration and `StockReleasePort`
