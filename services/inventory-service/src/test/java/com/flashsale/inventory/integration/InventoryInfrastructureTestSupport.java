@@ -60,6 +60,8 @@ public abstract class InventoryInfrastructureTestSupport {
             connection.serverCommands().flushDb();
             return null;
         });
+        jdbcTemplate.update("DELETE FROM stock_reservation_log");
+        jdbcTemplate.update("DELETE FROM reservations");
         jdbcTemplate.update("DELETE FROM stock_levels");
         jdbcTemplate.update("DELETE FROM products");
     }
