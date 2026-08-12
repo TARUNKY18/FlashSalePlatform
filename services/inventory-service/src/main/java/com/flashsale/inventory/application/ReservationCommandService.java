@@ -81,6 +81,8 @@ public class ReservationCommandService {
         if (decrementResult instanceof StockDecrementResult.SoldOut) {
             return new ReservationCreatedResult.SoldOut();
         }
+        StockDecrementResult.Decremented decremented =
+                (StockDecrementResult.Decremented) decrementResult;
 
         // Step 4: create and persist reservation
         Instant now = clock.instant();
@@ -93,6 +95,18 @@ public class ReservationCommandService {
                 now,
                 command.idempotencyKey()
         );
-        return new ReservationCreatedResult.Created(reservationRepository.save(reservation));
+        InventoryEvent.StockReserved event = new InventoryEvent.StockReserved(
+                java.util.UUID.randomUUID(),
+                now,
+                reservation.id(),
+                reservation.saleId(),
+                reservation.productId(),
+                reservation.userId(),
+                reservation.quantity().value(),
+                decremented.remainingStock().value(),
+                reservation.expiry().expiresAt()
+        );
+        return new ReservationCreatedResult.Created(
+                reservationRepository.saveWithOutboxEvent(reservation, event));
     }
 }

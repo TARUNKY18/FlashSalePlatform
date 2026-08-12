@@ -1,6 +1,7 @@
 package com.flashsale.inventory.integration;
 
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import com.flashsale.inventory.application.CreateReservationCommand;
@@ -40,6 +41,9 @@ class ReservationCommandIntegrationTest extends InventoryInfrastructureTestSuppo
         ReservationCreatedResult result = commandService.reserve(command);
 
         assertInstanceOf(ReservationCreatedResult.Created.class, result);
+        assertEquals(1, jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM inventory_outbox WHERE event_type = 'StockReserved'",
+                Integer.class));
     }
 
     @Test
@@ -53,6 +57,8 @@ class ReservationCommandIntegrationTest extends InventoryInfrastructureTestSuppo
 
         assertInstanceOf(ReservationCreatedResult.Created.class, first);
         assertInstanceOf(ReservationCreatedResult.IdempotentReplay.class, second);
+        assertEquals(1, jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM inventory_outbox", Integer.class));
     }
 
     @Test

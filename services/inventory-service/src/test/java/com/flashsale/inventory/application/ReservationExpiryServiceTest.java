@@ -8,6 +8,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+
 import com.flashsale.inventory.application.port.ProductRepository;
 import com.flashsale.inventory.application.port.ReservationRepository;
 import com.flashsale.inventory.application.port.StockReleasePort;
@@ -28,6 +31,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
 class ReservationExpiryServiceTest {
@@ -56,7 +60,7 @@ class ReservationExpiryServiceTest {
 
         service.expireReservations();
 
-        verify(reservationRepository, never()).save(any());
+        verify(reservationRepository, never()).saveWithOutboxEvent(any(), any());
         verify(stockReleasePort, never()).release(any(), any(int.class), any(int.class));
     }
 
@@ -73,7 +77,13 @@ class ReservationExpiryServiceTest {
 
         service.expireReservations();
 
-        verify(reservationRepository).save(reservation);
+        ArgumentCaptor<InventoryEvent> eventCaptor = ArgumentCaptor.forClass(InventoryEvent.class);
+        verify(reservationRepository).saveWithOutboxEvent(any(), eventCaptor.capture());
+        InventoryEvent.ReservationExpired event = assertInstanceOf(
+                InventoryEvent.ReservationExpired.class, eventCaptor.getValue());
+        assertEquals(reservation.id(), event.reservationId());
+        assertEquals(reservation.expiry().expiresAt(), event.expiredAt());
+        assertEquals(NOW, event.occurredAt());
         verify(stockReleasePort).release(saleId, 3, 100);
     }
 
@@ -91,7 +101,7 @@ class ReservationExpiryServiceTest {
         service.expireReservations();
 
         InOrder order = inOrder(reservationRepository, stockReleasePort);
-        order.verify(reservationRepository).save(any());
+        order.verify(reservationRepository).saveWithOutboxEvent(any(), any());
         order.verify(stockReleasePort).release(any(), anyInt(), anyInt());
     }
 
@@ -108,7 +118,8 @@ class ReservationExpiryServiceTest {
 
         service.expireReservations();
 
-        verify(reservationRepository).save(reservation);
+        verify(reservationRepository).saveWithOutboxEvent(
+                org.mockito.ArgumentMatchers.eq(reservation), any());
     }
 
     @Test
@@ -124,7 +135,8 @@ class ReservationExpiryServiceTest {
 
         service.expireReservations();
 
-        verify(reservationRepository).save(reservation);
+        verify(reservationRepository).saveWithOutboxEvent(
+                org.mockito.ArgumentMatchers.eq(reservation), any());
     }
 
     @Test
@@ -136,7 +148,8 @@ class ReservationExpiryServiceTest {
 
         service.expireReservations();
 
-        verify(reservationRepository).save(reservation);
+        verify(reservationRepository).saveWithOutboxEvent(
+                org.mockito.ArgumentMatchers.eq(reservation), any());
         verify(stockReleasePort, never()).release(any(), any(int.class), any(int.class));
     }
 
@@ -153,8 +166,10 @@ class ReservationExpiryServiceTest {
 
         service.expireReservations();
 
-        verify(reservationRepository).save(r1);
-        verify(reservationRepository).save(r2);
+        verify(reservationRepository).saveWithOutboxEvent(
+                org.mockito.ArgumentMatchers.eq(r1), any());
+        verify(reservationRepository).saveWithOutboxEvent(
+                org.mockito.ArgumentMatchers.eq(r2), any());
     }
 
     // --- helpers ---

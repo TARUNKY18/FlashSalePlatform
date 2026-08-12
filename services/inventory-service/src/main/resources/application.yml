@@ -34,6 +34,31 @@ spring:
       cluster:
         nodes: ${SPRING_DATA_REDIS_CLUSTER_NODES:localhost:7001,localhost:7002,localhost:7003}
 
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    admin:
+      auto-create: true
+      fail-fast: false
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      retries: 3
+      compression-type: lz4
+      properties:
+        retry.backoff.ms: 100
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        linger.ms: 5
+        request.timeout.ms: 30000
+        delivery.timeout.ms: 120000
+
+inventory:
+  kafka:
+    topic:
+      replication-factor: ${INVENTORY_EVENTS_REPLICATION_FACTOR:3}
+      min-in-sync-replicas: ${INVENTORY_EVENTS_MIN_IN_SYNC_REPLICAS:2}
+
 management:
   endpoints:
     web:

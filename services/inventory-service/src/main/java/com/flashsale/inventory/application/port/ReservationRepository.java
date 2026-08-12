@@ -1,5 +1,6 @@
 package com.flashsale.inventory.application.port;
 
+import com.flashsale.inventory.application.InventoryEvent;
 import com.flashsale.inventory.domain.aggregate.Reservation;
 import com.flashsale.inventory.domain.vo.ReservationId;
 import java.time.Instant;
@@ -18,4 +19,6 @@ public interface ReservationRepository {
     List<Reservation> findExpiredPending(Instant now);
 
     Reservation save(Reservation reservation);
+
+    Reservation saveWithOutboxEvent(Reservation reservation, InventoryEvent event);
 }

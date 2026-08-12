@@ -1,6 +1,7 @@
 package com.flashsale.inventory.application;
 
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
@@ -31,6 +32,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 
 class ReservationCommandServiceTest {
@@ -60,7 +62,8 @@ class ReservationCommandServiceTest {
         when(stockCounterService.decrement(any(), any(), anyInt()))
                 .thenReturn(new StockDecrementResult.Decremented(
                         com.flashsale.inventory.domain.vo.StockCount.of(9)));
-        when(reservationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(reservationRepository.saveWithOutboxEvent(any(), any()))
+                .thenAnswer(inv -> inv.getArgument(0));
     }
 
     @Test
@@ -71,7 +74,16 @@ class ReservationCommandServiceTest {
         Reservation r = ((ReservationCreatedResult.Created) result).reservation();
         assertNotNull(r.id());
         assertInstanceOf(Reservation.Status.Pending.class, r.status());
-        verify(reservationRepository).save(any());
+        ArgumentCaptor<InventoryEvent> eventCaptor = ArgumentCaptor.forClass(InventoryEvent.class);
+        verify(reservationRepository).saveWithOutboxEvent(any(), eventCaptor.capture());
+        InventoryEvent.StockReserved event =
+                assertInstanceOf(InventoryEvent.StockReserved.class, eventCaptor.getValue());
+        assertEquals(r.id(), event.reservationId());
+        assertEquals(r.id(), event.aggregateId());
+        assertEquals(NOW, event.occurredAt());
+        assertEquals(9, event.remainingStock());
+        assertEquals("1.0", event.eventVersion());
+        assertEquals("Reservation", event.aggregateType());
     }
 
     @Test
@@ -83,7 +95,7 @@ class ReservationCommandServiceTest {
 
         assertInstanceOf(ReservationCreatedResult.IdempotentReplay.class, result);
         assertSame(existing, ((ReservationCreatedResult.IdempotentReplay) result).reservation());
-        verify(reservationRepository, never()).save(any());
+        verify(reservationRepository, never()).saveWithOutboxEvent(any(), any());
         verify(duplicateGuard, never()).tryAcquire(any(), any());
     }
 
@@ -95,7 +107,7 @@ class ReservationCommandServiceTest {
         ReservationCreatedResult result = service.reserve(command);
 
         assertInstanceOf(ReservationCreatedResult.SoldOut.class, result);
-        verify(reservationRepository, never()).save(any());
+        verify(reservationRepository, never()).saveWithOutboxEvent(any(), any());
     }
 
     @Test
@@ -105,7 +117,7 @@ class ReservationCommandServiceTest {
         ReservationCreatedResult result = service.reserve(command);
 
         assertInstanceOf(ReservationCreatedResult.DuplicateReservation.class, result);
-        verify(reservationRepository, never()).save(any());
+        verify(reservationRepository, never()).saveWithOutboxEvent(any(), any());
         verify(stockCounterService, never()).decrement(any(), any(), any(int.class));
     }
 

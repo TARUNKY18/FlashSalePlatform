@@ -15,6 +15,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import com.flashsale.inventory.infra.kafka.InventoryOutboxPublisher;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.lifecycle.Startables;
@@ -26,6 +28,9 @@ import org.testcontainers.utility.DockerImageName;
 @SpringBootTest
 @Import(InventoryInfrastructureTestSupport.StandaloneRedisTestConfiguration.class)
 public abstract class InventoryInfrastructureTestSupport {
+
+    @MockBean
+    private InventoryOutboxPublisher inventoryOutboxPublisher;
 
     protected static final PostgreSQLContainer<?> POSTGRES =
             new PostgreSQLContainer<>(DockerImageName.parse("postgres:16.3-alpine"))
@@ -60,6 +65,7 @@ public abstract class InventoryInfrastructureTestSupport {
             connection.serverCommands().flushDb();
             return null;
         });
+        jdbcTemplate.update("DELETE FROM inventory_outbox");
         jdbcTemplate.update("DELETE FROM stock_reservation_log");
         jdbcTemplate.update("DELETE FROM reservations");
         jdbcTemplate.update("DELETE FROM stock_levels");

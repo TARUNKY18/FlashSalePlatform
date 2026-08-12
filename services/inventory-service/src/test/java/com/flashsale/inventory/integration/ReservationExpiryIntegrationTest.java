@@ -50,6 +50,9 @@ class ReservationExpiryIntegrationTest extends InventoryInfrastructureTestSuppor
 
         Reservation loaded = reservationRepository.findById(reservation.id()).orElseThrow();
         assertInstanceOf(Status.Expired.class, loaded.status());
+        assertEquals(1, jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM inventory_outbox WHERE event_type = 'ReservationExpired'",
+                Integer.class));
     }
 
     @Test

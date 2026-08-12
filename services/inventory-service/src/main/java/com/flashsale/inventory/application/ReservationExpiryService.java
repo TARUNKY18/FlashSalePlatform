@@ -8,8 +8,10 @@ import com.flashsale.inventory.domain.aggregate.Product;
 import com.flashsale.inventory.domain.aggregate.Reservation;
 import com.flashsale.inventory.domain.entity.StockLevel;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -67,7 +69,18 @@ public class ReservationExpiryService {
 
     private void expireOne(Reservation reservation) {
         reservation.expire();
-        reservationRepository.save(reservation);
+        Instant occurredAt = clock.instant();
+        InventoryEvent.ReservationExpired event = new InventoryEvent.ReservationExpired(
+                UUID.randomUUID(),
+                occurredAt,
+                reservation.id(),
+                reservation.saleId(),
+                reservation.productId(),
+                reservation.userId(),
+                reservation.quantity().value(),
+                reservation.expiry().expiresAt()
+        );
+        reservationRepository.saveWithOutboxEvent(reservation, event);
 
         releaseStock(reservation);
     }

@@ -10,6 +10,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.flashsale.inventory.application.InventoryEvent;
 import com.flashsale.inventory.domain.aggregate.Reservation;
 import com.flashsale.inventory.domain.aggregate.Reservation.Status;
 import com.flashsale.inventory.domain.vo.OrderId;
@@ -32,9 +34,12 @@ class ReservationRepositoryAdapterTest {
 
     private final SpringDataReservationRepository springDataRepository =
             mock(SpringDataReservationRepository.class);
+    private final SpringDataInventoryOutboxRepository outboxRepository =
+            mock(SpringDataInventoryOutboxRepository.class);
     private final ReservationPersistenceMapper mapper = mock(ReservationPersistenceMapper.class);
     private final ReservationRepository repository =
-            new ReservationRepository(springDataRepository, mapper);
+            new ReservationRepository(
+                    springDataRepository, outboxRepository, mapper, new ObjectMapper());
 
     @Test
     void loadsAndMapsReservation() {
@@ -113,6 +118,37 @@ class ReservationRepositoryAdapterTest {
     @Test
     void saveRejectsNullReservation() {
         assertThrows(NullPointerException.class, () -> repository.save(null));
+    }
+
+    @Test
+    void saveWithOutboxEventPersistsReservationAndOneOutboxRow() {
+        Reservation aggregate = stubDomain();
+        ReservationJpaEntity entity = stubEntity();
+        when(mapper.toJpaEntity(aggregate)).thenReturn(entity);
+        when(springDataRepository.saveAndFlush(entity)).thenReturn(entity);
+        when(mapper.toDomain(entity)).thenReturn(aggregate);
+        InventoryEvent event = new InventoryEvent.StockReserved(
+                UUID.randomUUID(), Instant.parse("2098-01-01T00:00:00Z"), aggregate.id(),
+                aggregate.saleId(), aggregate.productId(), aggregate.userId(), 1, 9,
+                aggregate.expiry().expiresAt());
+
+        Reservation saved = repository.saveWithOutboxEvent(aggregate, event);
+
+        assertSame(aggregate, saved);
+        verify(springDataRepository).saveAndFlush(entity);
+        verify(outboxRepository).saveAndFlush(any(InventoryOutboxJpaEntity.class));
+    }
+
+    @Test
+    void saveWithOutboxEventRejectsMismatchedReservation() {
+        Reservation aggregate = stubDomain();
+        InventoryEvent event = new InventoryEvent.StockReserved(
+                UUID.randomUUID(), Instant.now(), ReservationId.generate(), aggregate.saleId(),
+                aggregate.productId(), aggregate.userId(), 1, 9, aggregate.expiry().expiresAt());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> repository.saveWithOutboxEvent(aggregate, event));
+        verifyNoInteractions(outboxRepository);
     }
 
     // --- helpers ---
