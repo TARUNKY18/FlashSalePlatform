@@ -2957,3 +2957,70 @@ Total: 310
 | Slice 4: `stock_release.lua` integration + expiry sweep | ✔ DONE — uncommitted |
 | Slice 5: Kafka events | NOT STARTED |
 | Slice 6: 1500-concurrent integration test | NOT STARTED |
+
+---
+
+## SESSION-015
+**Date:** 2026-08-12
+**Milestone:** Week 4, Slice 5 — Inventory Transactional Outbox + Kafka Events
+**Outcome:** COMPLETE — frozen contract verified; documentation reconciled
+**Engineer:** Tarun K Y
+
+---
+
+### Implemented scope
+
+- Added Flyway V4 `inventory_outbox` and infrastructure-only JPA persistence;
+  no outbox state entered the Inventory domain.
+- Added application events `StockReserved` and `ReservationExpired`.
+- Persisted a successful reservation and its `StockReserved` outbox row in one
+  PostgreSQL transaction, using PostgreSQL-authoritative `remainingStock`.
+- Persisted the expiry transition and its `ReservationExpired` outbox row in
+  one PostgreSQL transaction. Existing Redis restoration remains post-commit
+  and cannot remove or change the committed event.
+- Added a 500 ms publisher using batches of at most 100 rows selected in
+  `created_at` order with `FOR UPDATE SKIP LOCKED` and held through publication.
+- Added at-least-once `inventory-events` publication with a stable application-
+  assigned `eventId`, Kafka key derived from persisted `payload.productId`, and
+  batch failure metadata with indefinite later polling.
+- Added only the InventoryService-owned `inventory-events` topic: 16 partitions,
+  three-day retention, LZ4, production replication factor 3/min ISR 2, and the
+  single-broker test equivalent replication factor 1/min ISR 1.
+- The verified implementation/test change set was exactly 22 authorized files.
+
+### Contract corrections and final audit
+
+- Persisted `event_type` accepts exactly `StockReserved` or
+  `ReservationExpired`; null, blank, and unknown values fail batch preparation
+  before the first Kafka send, leaving rows unpublished and recording failure
+  metadata.
+- Kafka outage/recovery is verified against the same real Kafka Testcontainer
+  broker endpoint. Recovery is not simulated by manually resetting
+  `published=false`; the row remains unpublished during the outage, publishes
+  after broker restart, and retains its original `eventId`.
+- Final contract verdict: **PASS**. No forbidden or unrelated files were part of
+  the 22-file Slice 5 implementation/test commit (`233ca84`).
+
+### Verification
+
+```text
+./gradlew :services:inventory-service:cleanTest :services:inventory-service:build
+BUILD SUCCESSFUL
+InventoryService: 318 passed, 0 failed, 0 errors, 0 skipped
+
+./gradlew clean build
+BUILD SUCCESSFUL
+InventoryService: 318 passed, 0 failed, 0 errors, 0 skipped
+SaleService:       16 passed, 0 failed, 0 errors, 0 skipped
+Total:            334 passed, 0 failed, 0 errors, 0 skipped
+
+git diff --check
+PASS
+```
+
+### Documentation reconciliation
+
+Canonical current-state, plan, schema, requirements, domain-event, and Kafka
+references were updated only where the verified Slice 5 implementation made
+their statements stale. The roadmap was not expanded: the next planned Week 4
+slice remains the 1500-concurrent integration test for a 1000-unit sale.

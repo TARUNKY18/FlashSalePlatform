@@ -286,11 +286,21 @@ Consumers must ignore unknown fields (`FAIL_ON_UNKNOWN_PROPERTIES = false`).
 
 ### inventory-events schemas
 
+> **Verified InventoryService Slice 5 contract (2026-08-12):** The implemented
+> event envelope contains exactly `eventId`, `eventType`, `eventVersion`,
+> `occurredAt`, `aggregateId`, `aggregateType`, and `payload`; trace propagation
+> remains deferred. Only `StockReserved` and `ReservationExpired` persisted
+> event types are publishable. Null, blank, or unknown persisted types are
+> rejected before the first Kafka send. The implementation does not create or
+> consume retry topics or DLQs.
+
 **StockReserved** ← highest-volume event in the system
 ```json
 {
+  "eventId":       "event-uuid",
   "eventType":     "StockReserved",
   "eventVersion":  "1.0",
+  "occurredAt":    "2026-06-15T12:00:00.000Z",
   "aggregateId":   "reservation-uuid",
   "aggregateType": "Reservation",
   "payload": {
@@ -300,8 +310,7 @@ Consumers must ignore unknown fields (`FAIL_ON_UNKNOWN_PROPERTIES = false`).
     "userId":         "user-uuid",
     "quantity":       1,
     "remainingStock": 142,
-    "expiresAt":      "2026-06-15T12:10:00.000Z",
-    "source":         "REDIS"
+    "expiresAt":      "2026-06-15T12:10:00.000Z"
   }
 }
 ```
@@ -328,9 +337,11 @@ Consumers must ignore unknown fields (`FAIL_ON_UNKNOWN_PROPERTIES = false`).
 **ReservationExpired**
 ```json
 {
-  "eventType": "ReservationExpired",
-  "eventVersion": "1.0",
-  "aggregateId": "reservation-uuid",
+  "eventId":       "event-uuid",
+  "eventType":     "ReservationExpired",
+  "eventVersion":  "1.0",
+  "occurredAt":    "2026-06-15T12:10:01.000Z",
+  "aggregateId":   "reservation-uuid",
   "aggregateType": "Reservation",
   "payload": {
     "reservationId": "reservation-uuid",
@@ -338,8 +349,7 @@ Consumers must ignore unknown fields (`FAIL_ON_UNKNOWN_PROPERTIES = false`).
     "saleId":        "sale-uuid",
     "productId":     "product-uuid",
     "quantity":      1,
-    "expiredAt":     "2026-06-15T12:10:00.000Z",
-    "stockRestored": true
+    "expiredAt":     "2026-06-15T12:10:00.000Z"
   }
 }
 ```

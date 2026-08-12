@@ -2,7 +2,12 @@
 ## Flash Sale Platform — Single Source of Truth
 **Version:** 3 (replaces Version 2, 2026-06-17)
 
-> **Implementation status warning (2026-08-06):** The implementation-status fields in this document are stale — they reflect the state before Week 2 and Week 3 were implemented. For current implementation truth, see `HANDOFF.md` and `context/CURRENT_STATE.md`. The architecture, ADR, and design sections remain authoritative. Do not copy any "PLANNED — no code" field into implementation decisions.
+> **Implementation status warning (updated 2026-08-12):** Broad historical
+> implementation-status fields in this document remain stale. The verified
+> Slice 5 facts below have been reconciled; for complete current implementation
+> truth, see `HANDOFF.md` and `context/CURRENT_STATE.md`. The architecture, ADR,
+> and design sections remain authoritative. Do not copy any unreconciled
+> "PLANNED — no code" field into implementation decisions.
 
 **Status legend:**
 - `VERIFIED` — confirmed via terminal output, docker logs, screenshots, or explicit command results.
@@ -98,9 +103,9 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 | 003 | Stock Decrement — Redis Lua Atomic Script (= ADR-001) | Approved | PLANNED — 4 Lua scripts generated; no service exists to execute them |
 | 004 | Redis Fallback — `SELECT FOR UPDATE` | Approved | PLANNED — no code |
 | 005 | Concurrency Model — Java 21 Virtual Threads (= ADR-002) | Approved | PLANNED — no Java code exists |
-| 006 | Inter-Service Communication — Kafka async / HTTP sync (= ADR-003) | Approved | PLANNED — no Kafka producers/consumers exist |
-| 007 | Kafka Topic Design and Partition Strategy (= ADR-013) | Approved | PLANNED — topics not yet created |
-| 008 | Event Reliability — Transactional Outbox (= ADR-004) | Approved | PLANNED — no `OutboxEvent` entity exists |
+| 006 | Inter-Service Communication — Kafka async / HTTP sync (= ADR-003) | Approved | PARTIAL — InventoryService produces `StockReserved` and `ReservationExpired`; no consumers exist |
+| 007 | Kafka Topic Design and Partition Strategy (= ADR-013) | Approved | PARTIAL — InventoryService owns creation of `inventory-events`; other topics remain planned |
+| 008 | Event Reliability — Transactional Outbox (= ADR-004) | Approved | PARTIAL — InventoryService has an infrastructure-owned `inventory_outbox`; OrderService outbox remains planned |
 | 009 | Order Idempotency — Dual-Layer Key Check | Approved | PLANNED — no code |
 | 010 | Saga Pattern — Choreography over Orchestration (= ADR-012) | Approved | PLANNED — no saga consumers exist |
 | 011 | Redis Architecture — Three-Layer Contract | Approved | PLANNED — no code |
@@ -129,8 +134,8 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 | Observability | Micrometer, Prometheus, OpenTelemetry, Tempo | `/actuator/prometheus`, 100%/10% trace sampling | PLANNED — no metrics or tracing code written |
 | Load testing | Gatling or k6 | 50,000 concurrent user simulation | PLANNED — no simulation files written |
 | Property-based testing | jqwik 1.9.0 | Applied to Product stock domain model | VERIFIED — 5 properties × 1,000 generated examples in InventoryService; test-only classpath |
-| Integration testing | Testcontainers | Real Postgres/Redis/Kafka in tests | VERIFIED — PostgreSQL 16 and Redis 7.2 Testcontainers suites in InventoryService (28 tests) |
-| Migrations | Flyway | — | VERIFIED — V1 in SaleService (flash_sales, sale_schedules, sale_status_history); V1 in InventoryService (products, stock_levels); V2 in InventoryService (reservations, stock_reservation_log) |
+| Integration testing | Testcontainers | Real Postgres/Redis/Kafka in tests | VERIFIED — InventoryService uses PostgreSQL 16.3, Redis 7.2, and a Kafka 3.7-compatible broker; Slice 5 includes real same-endpoint Kafka outage/recovery coverage |
+| Migrations | Flyway | — | VERIFIED — V1 in SaleService (`flash_sales`, `sale_schedules`, `sale_status_history`); InventoryService V1 (`products`, `stock_levels`), V2 (`reservations`, `stock_reservation_log`), V3 (`idempotency_key NOT NULL`), V4 (`inventory_outbox`) |
 
 **Package structure (PLANNED — designed, not created):** `com.flashsale.` with subpackages `sale/`, `inventory/`, `order/`, `notification/`, `analytics/`, each following `domain/{aggregate,entity,vo,event}`, `application/`, `infra/`.
 
@@ -143,7 +148,7 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 | Service | Owns | DB / Schema | Kafka Role | Redis Role | Port | Code Status |
 |---|---|---|---|---|---|---|
 | SaleService | Sale lifecycle, scheduling, status machine | `sales_db` | Producer: `sale-events` | Cache: active sale metadata | 8081 | COMPLETE — Week 2; FlashSale aggregate, REST API, Flyway V1, 16 tests |
-| InventoryService | Stock levels, atomic decrement, pre-warm, reservations | `inventory_db` | Producer: `inventory-events` | Layer 1: stock counter (Lua DECR), pre-warm | 8082 | IN PROGRESS — Week 4 Slice 2 complete; 48 production files, 241 tests, commit `683efe4` |
+| InventoryService | Stock levels, atomic decrement, pre-warm, reservations | `inventory_db` | Producer: `inventory-events` | Layer 1: stock counter (Lua DECR), pre-warm | 8082 | IN PROGRESS — Week 4 Slices 1–5 complete; 70 production Java files, 318 tests, commit `233ca84` |
 | OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PLANNED — zero code written |
 | NotificationService | Email, push, SMS fan-out | None (stateless) | Consumer: all three topics | None | 8084 | PLANNED — zero code written |
 | AnalyticsService | Event ingestion, metrics, dashboards | ClickHouse | Consumer: all three topics | None | 8085 | PLANNED — zero code written |
@@ -165,7 +170,10 @@ HPA trigger: CPU utilisation > 70%.
 
 ## Domain Model
 
-**Status: Reservation domain aggregate implemented (Week 4 Slice 1) and Reservation persistence implemented (Week 4 Slice 2, commit `683efe4`). All other aggregates remain planned.**
+**Status: Reservation lifecycle through Slice 5 is implemented and verified,
+including persistence, REST creation, expiry, and application events backed by
+an infrastructure-owned outbox. The Inventory domain model has no outbox state.
+All other unimplemented aggregates remain planned.**
 
 **Aggregate roots (4):**
 | Aggregate | Owning service / schema | Core invariant | State machine |
@@ -343,20 +351,24 @@ Image migration: VERIFIED — `sed -i '' 's/bitnami\/kafka:3.7.0/apache\/kafka:3
 | Topic | Partitions | Partition Key | Retention | Status |
 |---|---|---|---|---|
 | `sale-events` | 8 | `saleId` | 7 days | PLANNED — not created |
-| `inventory-events` | 16 | `productId` | 3 days | PLANNED — not created |
+| `inventory-events` | 16 | `productId` | 3 days | VERIFIED in InventoryService configuration and real Kafka Testcontainer tests; production RF=3/min ISR=2, single-broker test override RF=1/min ISR=1 |
 | `order-events` | 8 | `saleId` | 3 days | PLANNED — not created |
 | `notifications.dlq` | 4 | none | 14 days | PLANNED — not created |
 | `analytics.dlq` | 4 | none | 14 days | PLANNED — not created; presence in the "final" architecture spec is disputed. **See CONFLICTS.md.** |
 
-`AUTO_CREATE_TOPICS_ENABLE=false`; topics are created by services on startup; no services exist.
+`AUTO_CREATE_TOPICS_ENABLE=false`; services own topic creation. Slice 5 adds only
+InventoryService ownership of `inventory-events`; no other topic was added.
 
 Supplementary design documents and the build plan additionally define `sale-events.retry`, `inventory-events.retry`, and `order-events.retry` topics, not present in the ranked architecture documents. **See CONFLICTS.md.**
 
 ### Consumer groups
 `notification-svc-consumer` (all 3 topics), `analytics-svc-consumer` (all 3 topics) — PLANNED. OrderService's `inventory-events` consumer group name differs across documents. **See CONFLICTS.md.**
 
-### Producer/consumer configuration (PLANNED)
-`acks=all`, `enable-idempotence=true`, `enable.auto.commit=false`, `isolation-level=read-committed`. OrderService commits individually per message; NotificationService/AnalyticsService commit in batches.
+### Producer/consumer configuration
+InventoryService producer configuration is VERIFIED: `acks=all`, three Kafka
+client retries, 100 ms retry backoff, LZ4 compression, idempotence enabled,
+maximum five in-flight requests per connection, 5 ms linger, 30 s request
+timeout, and 120 s delivery timeout. Consumer configuration remains planned.
 
 ---
 
@@ -375,11 +387,15 @@ Engine: PostgreSQL 16 (`postgres:16.3-alpine` VERIFIED). Zero cross-database for
 
 **`sales_db`:** `flash_sales` (FlashSale aggregate root — status/total_stock/timestamps, `version` optimistic lock), `sale_schedules` (1:1 with `flash_sales`; `sale_end > sale_start`), `sale_status_history` (immutable, insert-only audit log).
 
-**`inventory_db`:** `products` (global product definition, `sku` UNIQUE), `stock_levels` (Postgres source of truth for stock; `current_stock <= total_allocated`), `reservations` (partial unique index `(user_id, sale_id) WHERE status IN ('PENDING','CONFIRMED')` enforces one active reservation per user per sale; `idempotency_key` UNIQUE), `stock_reservation_log` (append-only audit).
+**`inventory_db`:** `products` (global product definition, `sku` UNIQUE), `stock_levels` (Postgres source of truth for stock; `current_stock <= total_allocated`), `reservations` (partial unique index `(user_id, sale_id) WHERE status IN ('PENDING','CONFIRMED')` enforces one active reservation per user per sale; `idempotency_key` UNIQUE), `stock_reservation_log` (append-only audit), and infrastructure-owned `inventory_outbox` (V4; restrictive reservation FK, unique stable event ID, JSONB payload, publish/retry metadata).
 
 **`orders_db`:** `orders` (`idempotency_key` UNIQUE — the core correctness guarantee; `reservation_id` UNIQUE), `order_outbox` (`event_id` UNIQUE Kafka dedup key; polled every 500ms via partial index `WHERE published = FALSE`), `idempotency_keys` (PK is the key itself; `expires_at` generated as `created_at + 24 hours`).
 
-**Key query patterns (PLANNED):** outbox poller uses `FOR UPDATE SKIP LOCKED` (allows multiple OrderService pods to poll concurrently without queuing); stock fallback uses `SELECT ... FOR UPDATE` then a version-checked `UPDATE`; expiry sweep runs every 30s on `PENDING` reservations past `expires_at`.
+**Key query patterns:** the VERIFIED Inventory outbox poller selects at most 100
+unpublished rows ordered by `created_at` using `FOR UPDATE SKIP LOCKED`, retaining
+the row locks through the Kafka batch attempt. The planned OrderService outbox
+uses the same concurrency pattern. Stock fallback and expiry query descriptions
+remain as documented for their respective slices.
 
 **Confirmed application tables that do NOT exist in any database (VERIFIED):** `flash_sales`, `products`, `reservations`, `orders`, `order_outbox`, `idempotency_keys`.
 

@@ -1,7 +1,7 @@
 # CURRENT_STATE.md
 **Milestone:** Week 4 — Reservation (in progress)
 **Status:** 🟡 IN PROGRESS
-**Date:** 2026-08-11
+**Date:** 2026-08-12
 **Engineer:** Tarun K Y
 
 ---
@@ -11,12 +11,12 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `0b4c1c4` — `week 4 slice 3 done` |
-| Implementation commit status | All Week 3 and Week 4 Slices 1–4 implemented. Slice 3 committed. Slice 4 uncommitted. HEAD: `0b4c1c4` |
-| Build | `BUILD SUCCESSFUL` in 52s |
-| Production Java files | 66 |
-| Test classes | 37 |
-| Inventory tests | 294 passed, 0 failed, 0 errors, 0 skipped |
+| Latest commit | `233ca84` — `week 4 slice 5 completed` |
+| Implementation commit status | Week 3 and Week 4 Slices 1–5 implemented, contract-verified, committed, and present on `origin/main` |
+| Build | InventoryService build and whole-project clean build both `BUILD SUCCESSFUL` |
+| Production Java files | 70 |
+| Test classes | 40 |
+| Inventory tests | 318 passed, 0 failed, 0 errors, 0 skipped |
 | SaleService regression | 16 passed, 0 failed, 0 errors, 0 skipped |
 
 ---
@@ -41,8 +41,9 @@
 | ✔ Pre-Warm Use Case (SESSION-009, committed `7b68f14`) | `PreWarmStockUseCase`, `StockPreWarmPort`, `RedisStockPreWarmAdapter`, `StockPreWarmLuaExecutor`, revision-fenced `stock-prewarm.lua`; `InventoryConfiguration` (`Clock` bean); `PreWarmStockResult` enum; 32 tests (+4 classes); reviewed and approved; committed |
 | ✔ Reservation Domain Aggregate (SESSION-011, committed `713d2d2`) | `Reservation` aggregate root (sealed `Status`, `create`/`reconstitute`, `confirm`/`expire`/`release`); `ReservationId`, `UserId`, `OrderId`, `Quantity`, `ReservationExpiry` value objects; `ReservationTest` (29 cases), `ReservationValueObjectTest` (18 cases); 47 new tests; reviewed and approved; committed |
 | ✔ Reservation Persistence (SESSION-012, committed `683efe4`) | V2 Flyway migration (`reservations`, `stock_reservation_log`); `ReservationJpaEntity` (`@Version`, immutable fields, `updateStatus`/`updateOrderId`); `ReservationPersistenceMapper`; `SpringDataReservationRepository`; `ReservationRepository` application port and infra adapter (load-then-update pattern for `@Version` correctness); `ReservationPersistenceMapperTest`, `ReservationRepositoryAdapterTest` (6 cases), `ReservationPersistenceIntegrationTest` (8 cases); adversarial review: F-1 applied, F-2 rejected (optimization-only), F-3 applied; 31 new tests; reviewed and approved; committed |
-| ✔ REST + Command Service (SESSION-013, uncommitted) | V3 Flyway migration (idempotency_key NOT NULL); `Reservation.idempotencyKey` field; `ReservationJpaEntity`/`ReservationPersistenceMapper`/`ReservationRepository` updated for idempotencyKey; `ReservationDuplicateGuardPort`/`ReservationDuplicateGuardUnavailableException`; `RedisReservationDuplicateGuardAdapter` (SET NX EX 30s, `resv:lock:{userId}:{saleId}`); `CreateReservationCommand`, `ReservationCreatedResult` (sealed); `ReservationCommandService` (idempotency→Redis guard→stock decrement→persist); `ReservationController` (POST /api/v1/reservations, 201/200/409/400); `InventoryExceptionHandler`; 3 DTO records; `spring-boot-starter-validation` added; 27 new tests; BUILD SUCCESSFUL 268/268 |
-| ✔ stock_release.lua integration + expiry sweep (SESSION-014, uncommitted) | `stock-release.lua` KEEPTTL fix (approved CONFLICT-NEW-001); `StockReleasePort`, `StockReleaseUnavailableException`, `StockReleaseResult`; `StockReleaseLuaExecutor`, `RedisStockReleaseAdapter`; `stockReleaseScript` bean; `@EnableScheduling` on `InventoryConfiguration`; `findExpiredPending(Instant)` on `ReservationRepository` application port, Spring Data query, and infra adapter; `ReservationExpiryService` (`@Scheduled(fixedDelay=30_000)`); 26 new tests (unit + integration); BUILD SUCCESSFUL 294/294 Inventory, 310/310 total |
+| ✔ REST + Command Service (SESSION-013, committed `0b4c1c4`) | V3 Flyway migration (idempotency_key NOT NULL); `Reservation.idempotencyKey` field; `ReservationJpaEntity`/`ReservationPersistenceMapper`/`ReservationRepository` updated for idempotencyKey; `ReservationDuplicateGuardPort`/`ReservationDuplicateGuardUnavailableException`; `RedisReservationDuplicateGuardAdapter` (SET NX EX 30s, `resv:lock:{userId}:{saleId}`); `CreateReservationCommand`, `ReservationCreatedResult` (sealed); `ReservationCommandService` (idempotency→Redis guard→stock decrement→persist); `ReservationController` (POST /api/v1/reservations, 201/200/409/400); `InventoryExceptionHandler`; 3 DTO records; `spring-boot-starter-validation` added; 27 new tests; BUILD SUCCESSFUL 268/268 |
+| ✔ stock_release.lua integration + expiry sweep (SESSION-014, committed `5810c7d`) | `stock-release.lua` KEEPTTL fix (approved CONFLICT-NEW-001); `StockReleasePort`, `StockReleaseUnavailableException`, `StockReleaseResult`; `StockReleaseLuaExecutor`, `RedisStockReleaseAdapter`; `stockReleaseScript` bean; `@EnableScheduling` on `InventoryConfiguration`; `findExpiredPending(Instant)` on `ReservationRepository` application port, Spring Data query, and infra adapter; `ReservationExpiryService` (`@Scheduled(fixedDelay=30_000)`); 26 new tests (unit + integration); BUILD SUCCESSFUL 294/294 Inventory, 310/310 total |
+| ✔ Inventory transactional outbox + Kafka events (SESSION-015, committed `233ca84`) | V4 `inventory_outbox`; infrastructure-only JPA persistence; atomic reservation/expiry + outbox writes; `StockReserved` and `ReservationExpired`; PostgreSQL-authoritative `remainingStock`; post-commit Redis restoration; 500 ms `FOR UPDATE SKIP LOCKED` publisher (100 rows); stable `eventId` at-least-once delivery; `productId` key; Inventory-owned `inventory-events` topic; unsupported persisted event types rejected before any send; real same-endpoint Kafka outage/recovery coverage; 24 new tests; frozen contract PASS |
 
 ---
 
@@ -50,10 +51,10 @@
 
 ```text
 ./gradlew clean build
-BUILD SUCCESSFUL in 52s
-Inventory: 294 tests passed, 0 failed, 0 errors, 0 skipped
+BUILD SUCCESSFUL
+Inventory: 318 tests passed, 0 failed, 0 errors, 0 skipped
 SaleService: 16 tests passed, 0 failed, 0 errors, 0 skipped
-Total: 310
+Total: 334
 ```
 
 Inventory verification comprises unit, property, and integration tests.
@@ -68,8 +69,10 @@ from its production runtime classpath.
 `reservations`, and `stock_reservation_log`. V1 created `products` and
 `stock_levels`; V2 added `reservations` (partial unique index on
 `(user_id, sale_id)` where `status IN ('PENDING','CONFIRMED')`) and
-`stock_reservation_log` (FK to `products`). V3 enforces `idempotency_key NOT NULL`. No release, reconciliation,
-audit, outbox, or Kafka table exists.
+`stock_reservation_log` (FK to `products`). V3 enforces `idempotency_key NOT NULL`.
+V4 adds infrastructure-owned `inventory_outbox`, with a restrictive FK to
+`reservations`, unique stable `event_id`, JSONB payload, publish state, and retry
+metadata. No release, reconciliation, or additional Kafka table exists.
 
 ---
 
@@ -101,9 +104,18 @@ audit, outbox, or Kafka table exists.
 - Synchronization failure is warned and cannot conceal the committed result.
 - The Reservation domain aggregate is implemented (domain layer only).
 - Reservation persistence is implemented (V2 Flyway migration, JPA entity, mapper, adapter).
-- Reservation REST API and Redis duplicate guard implemented (Slice 3, uncommitted).
-- Expiry sweep (`ReservationExpiryService`) and `stock-release.lua` integration implemented (Slice 4, uncommitted).
-- Kafka events are not yet in scope.
+- Reservation REST API and Redis duplicate guard implemented (Slice 3, `0b4c1c4`).
+- Expiry sweep (`ReservationExpiryService`) and `stock-release.lua` integration implemented (Slice 4, `5810c7d`).
+- Inventory transactional outbox and Kafka publication are implemented (Slice 5,
+  `233ca84`) without adding outbox state to the Inventory domain.
+- `StockReserved` is inserted atomically with a successful reservation;
+  `ReservationExpired` is inserted atomically with the expiry transition.
+- Redis restoration remains post-commit and does not alter the committed expiry event.
+- Outbox publication is at-least-once: a crash after Kafka acknowledgement but
+  before the database mark commits may redeliver the same stable `eventId`.
+- Only `StockReserved` and `ReservationExpired` persisted event types are
+  publishable; unsupported, null, blank, or unknown values fail the whole batch
+  before the first Kafka send.
 
 ---
 
@@ -135,8 +147,6 @@ audit, outbox, or Kafka table exists.
 - A PostgreSQL transaction and Product-root lock on every potentially
   successful request increase latency and contention.
 - Product-root locking serializes different sales for the same Product.
-- Pre-warm use case is implemented but not yet committed; working tree must be
-  committed before proceeding to documentation reconciliation.
 - Missing or revisionless Redis stock remains unavailable until pre-warm;
   independent revision-key eviction can increase PostgreSQL load.
 - Standalone Redis Testcontainers coverage does not prove Redis Cluster
@@ -154,8 +164,8 @@ Week 3 is **COMPLETE**. All implementation slices committed and pushed to `origi
 
 ## Week 4 Status
 
-Week 4 is **IN PROGRESS**. Slices 1–4 complete. Slices 1 and 2 committed; Slices 3 and 4 uncommitted.
+Week 4 is **IN PROGRESS**. Slices 1–5 are complete, contract-verified, and
+committed through `233ca84`.
 
-Remaining slices:
-- `StockReserved` / `ReservationExpired` Kafka events
+Next planned slice:
 - 1500-concurrent integration test (1000-unit sale)

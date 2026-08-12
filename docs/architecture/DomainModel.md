@@ -623,7 +623,7 @@ public record DomainEvent<T>(
 | `SaleStarted` | SaleContext | `sale-events` | `saleId` | SCHEDULED → ACTIVE |
 | `SaleEnded` | SaleContext | `sale-events` | `saleId` | ACTIVE → ENDED |
 | `StockAllocated` | InventoryContext | `inventory-events` | `productId` | Stock set for sale |
-| `StockReserved` | InventoryContext | `inventory-events` | `productId` | Lua decrement success |
+| `StockReserved` | InventoryContext | `inventory-events` | `productId` | Successful reservation and outbox row committed atomically, using PostgreSQL-authoritative remaining stock |
 | `ReservationExpired` | InventoryContext | `inventory-events` | `productId` | TTL elapsed |
 | `ReservationReleased` | InventoryContext | `inventory-events` | `productId` | Saga compensation |
 | `OrderCreated` | OrderContext | `order-events` | `saleId` | Order placed |

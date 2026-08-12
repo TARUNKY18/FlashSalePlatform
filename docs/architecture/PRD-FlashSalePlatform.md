@@ -243,9 +243,20 @@ Acceptance criteria:
 
 **FR-012** The system shall reject a reservation with `409 SALE_NOT_ACTIVE` when the sale status in Redis is not `ACTIVE` (checked before the Lua decrement).
 
-**FR-013** The system shall publish a `StockReserved` event to `inventory-events` (partition key: `productId`) on every successful reservation. Event payload shall include: `eventId`, `eventVersion`, `saleId`, `userId`, `reservationId`, `quantity`, `remainingStock`, `occurredAt`.
+**FR-013** The system shall durably enqueue a `StockReserved` event with every
+newly persisted successful reservation and publish it at-least-once to
+`inventory-events` (partition key: `productId`). The envelope contains
+`eventId`, `eventType`, `eventVersion`, `occurredAt`, `aggregateId`, and
+`aggregateType`; the payload contains exactly `reservationId`, `saleId`,
+`productId`, `userId`, `quantity`, PostgreSQL-authoritative `remainingStock`,
+and `expiresAt`.
 
-**FR-014** The system shall publish a `StockReleased` event to `inventory-events` when a reservation expires without being converted to an order.
+**FR-014** The system shall durably enqueue and publish a
+`ReservationExpired` event to `inventory-events` when the expiry sweep commits
+the reservation's expiry transition. The payload contains exactly
+`reservationId`, `saleId`, `productId`, `userId`, `quantity`, and `expiredAt`;
+Redis restoration remains post-commit and is not represented by a
+`stockRestored` field.
 
 **FR-015** Reservations shall expire after a configurable TTL (default 10 minutes). Expiry shall be enforced via Redis key TTL on reservation metadata and a Postgres background sweep for durability.
 

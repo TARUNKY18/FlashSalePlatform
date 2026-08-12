@@ -1,6 +1,6 @@
 # Flash Sale Platform — Engineering Handoff
 
-**Handoff date:** 2026-08-11
+**Handoff date:** 2026-08-12
 
 **Current milestone:** Week 4 — Reservation (in progress)
 
@@ -10,19 +10,22 @@
 
 **Week 4, Slice 2 status:** COMPLETE — Reservation persistence committed (`683efe4`); adversarial review completed; documentation reconciled in SESSION-012
 
-**Week 4, Slice 3 status:** COMPLETE — REST `POST /api/v1/reservations`, Redis duplicate guard, `ReservationCommandService`, V3 migration, 27 new tests; uncommitted; documented in SESSION-013
+**Week 4, Slice 3 status:** COMPLETE — REST `POST /api/v1/reservations`, Redis duplicate guard, `ReservationCommandService`, V3 migration, 27 new tests; committed `0b4c1c4`; documented in SESSION-013
 
-**Week 4, Slice 4 status:** COMPLETE — `stock-release.lua` KEEPTTL fix, `StockReleasePort`, `StockReleaseUnavailableException`, `StockReleaseResult`, `StockReleaseLuaExecutor`, `RedisStockReleaseAdapter`, `ReservationExpiryService` (`@Scheduled` 30 s), `findExpiredPending` JPQL query, `stockReleaseScript` bean, `@EnableScheduling`; 26 new tests; uncommitted; documented in SESSION-014
+**Week 4, Slice 4 status:** COMPLETE — `stock-release.lua` KEEPTTL fix, `StockReleasePort`, `StockReleaseUnavailableException`, `StockReleaseResult`, `StockReleaseLuaExecutor`, `RedisStockReleaseAdapter`, `ReservationExpiryService` (`@Scheduled` 30 s), `findExpiredPending` JPQL query, `stockReleaseScript` bean, `@EnableScheduling`; 26 new tests; committed `5810c7d`; documented in SESSION-014
+
+**Week 4, Slice 5 status:** COMPLETE — Inventory transactional outbox, `StockReserved` and `ReservationExpired`, atomic reservation/expiry + outbox persistence, 500 ms multi-pod-safe Kafka publisher, Inventory-owned `inventory-events` topic, real Kafka outage/recovery coverage; frozen contract PASS; 24 new tests; committed `233ca84`; documented in SESSION-015
 
 **Branch:** `main`
 
-**Latest commit:** `0b4c1c4` (`week 4 slice 3 done`), pushed to `origin/main`
+**Latest commit:** `233ca84` (`week 4 slice 5 completed`), present on `origin/main`
 
-**Working tree:** Slice 4 implementation uncommitted (20 new/modified files). Commit before starting Slice 5.
+**Working tree at reconciliation start:** clean; Slice 5's 22 implementation/test files are committed in `233ca84`.
 
 **Audience:** The senior engineer or Codex session continuing Week 4 development
 
-Week 3 is complete. Week 4 Slices 1, 2, and 3 are complete. This handoff reflects the post-Slice-3 Week 4 state.
+Week 3 is complete. Week 4 Slices 1–5 are complete and verified. This handoff
+reflects the post-Slice-5 Week 4 state.
 
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
@@ -75,11 +78,14 @@ infrastructure adapters + Spring/JPA/Redis
 - `infra.redis` implements atomic Redis operations without leaking Redis types
   through application ports.
 - `infra.config` owns infrastructure bean construction.
-- No Inventory REST/API layer exists.
-- No Kafka integration exists.
+- Inventory REST/API exists for reservation creation.
+- Inventory Kafka publication exists through the infrastructure-owned
+  transactional outbox; no consumers, retry topics, DLQs, Kafka transactions,
+  tracing, or cross-service changes were added.
 - The `Reservation` aggregate root (domain layer only) was introduced in Week 4, Slice 1.
-  Reservation persistence (V2 Flyway migration, JPA entity, mapper, adapter) was implemented
-  in Slice 2. REST, Redis duplicate guard, expiry sweep, and Kafka events remain unimplemented.
+  Reservation persistence was implemented in Slice 2, REST and duplicate guard
+  in Slice 3, expiry and Redis restoration in Slice 4, and transactional-outbox
+  Kafka events in Slice 5.
 
 The current decrement path is:
 
@@ -209,16 +215,18 @@ these approved implementation commits:
 | `713d2d2` | Reservation domain aggregate (Week 4, Slice 1) |
 | `683efe4` | Reservation persistence (Week 4, Slice 2) |
 | `0b4c1c4` | REST + Command Service + Redis guard (Week 4, Slice 3) |
+| `5810c7d` | `stock-release.lua` integration + expiry sweep (Week 4, Slice 4) |
+| `233ca84` | Inventory transactional outbox + Kafka events (Week 4, Slice 5) |
 
 InventoryService currently contains:
 
-- 66 production Java files.
-- 37 test Java files (36 runnable + `InventoryInfrastructureTestSupport`).
-- 294 passing Inventory tests (310 total including 16 SaleService).
+- 70 production Java files.
+- 40 test Java files (39 runnable + `InventoryInfrastructureTestSupport`).
+- 318 passing Inventory tests (334 total including 16 SaleService).
 - Four Lua scripts: `stock-decrement.lua`, `stock-projection-sync.lua`, `stock-prewarm.lua`, and `stock-release.lua` (all integrated).
-- Three Flyway migrations: V1 (`products`, `stock_levels`), V2 (`reservations`, `stock_reservation_log`), V3 (`idempotency_key NOT NULL`).
-- REST `POST /api/v1/reservations` implemented (Slice 3, uncommitted). Expiry sweep implemented (Slice 4, uncommitted).
-- No Kafka code, reconciliation integration, or 1500-concurrent integration test.
+- Four Flyway migrations: V1 (`products`, `stock_levels`), V2 (`reservations`, `stock_reservation_log`), V3 (`idempotency_key NOT NULL`), V4 (`inventory_outbox`).
+- REST `POST /api/v1/reservations`, expiry sweep, and Inventory Kafka outbox publication are implemented.
+- No reconciliation integration or 1500-concurrent integration test.
 
 ## ✔ Skeleton
 
@@ -1453,18 +1461,17 @@ is commit `f12d67d`, already pushed to `origin/main`.
 
 ```text
 Command: ./gradlew clean build
-Result:  BUILD SUCCESSFUL (SESSION-014, HEAD 683efe4 + Slices 3 and 4 uncommitted)
-Time:    52 seconds
-Tests:   Inventory 294; 0 failed, 0 errors, 0 skipped
+Result:  BUILD SUCCESSFUL (Slice 5 frozen regression gate)
+Tests:   Inventory 318; 0 failed, 0 errors, 0 skipped
          SaleService 16; 0 failed, 0 errors, 0 skipped
-         Total 310
+         Total 334
 ```
 
 ## Passing test inventory
 
 | Inventory test category | Passing tests |
 |---|---:|
-| Unit/property/integration (all) | 294 |
+| Unit/property/integration (all) | 318 |
 
 The complete repository build also runs 16 passing SaleService tests.
 
@@ -1523,13 +1530,13 @@ Week 3 tasks and were not introduced.
 | Slice 2: Reservation persistence | ✔ DONE | `683efe4` |
 | Adversarial review (Slice 2) — F-1 applied, F-2 rejected (optimization-only), F-3 applied | ✔ DONE | SESSION-012 |
 | Documentation reconciliation (Slice 2) | ✔ DONE | SESSION-012 |
-| Slice 3: REST + Command Service + Redis guard | ✔ DONE | uncommitted; SESSION-013 |
-| Slice 4: `stock_release.lua` integration + expiry sweep | ✔ DONE | uncommitted; SESSION-014 |
+| Slice 3: REST + Command Service + Redis guard | ✔ DONE | `0b4c1c4`; SESSION-013 |
+| Slice 4: `stock_release.lua` integration + expiry sweep | ✔ DONE | `5810c7d`; SESSION-014 |
+| Slice 5: Inventory outbox + `StockReserved` / `ReservationExpired` | ✔ DONE | `233ca84`; SESSION-015 |
 
-**Next approved slice:** Slice 5 — `StockReserved` / `ReservationExpired` Kafka events.
+**Next planned slice:** Slice 6 — 1500-concurrent integration test for a 1000-unit sale.
 
-Remaining Week 4 slices (not yet started): `StockReserved`/`ReservationExpired` Kafka events,
-1500-concurrent integration test.
+Remaining Week 4 slice (not yet started): 1500-concurrent integration test.
 
 ---
 

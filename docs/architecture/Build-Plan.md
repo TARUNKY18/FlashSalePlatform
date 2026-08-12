@@ -223,6 +223,13 @@ None. This week has no blockers. It is the root of all other work.
 **Phase:** Core Services
 **Goal:** The Reservation aggregate is live with its full lifecycle. The partial unique index enforces the "one active reservation per user per sale" invariant. The expiry sweep runs and releases stock.
 
+**Verified implementation status (2026-08-12):** Week 4 Slices 1–5 are
+complete. Slice 5 added the Inventory transactional outbox, `StockReserved` and
+`ReservationExpired`, Inventory-owned `inventory-events` topic configuration,
+and at-least-once publication and recovery tests. Its frozen contract passed
+318 InventoryService tests plus 16 SaleService regressions. The next existing
+Week 4 task is 4.7, the 1500-concurrent integration test; its scope is unchanged.
+
 ### Objectives
 
 - `Reservation` aggregate root separate from `Product`
@@ -234,12 +241,12 @@ None. This week has no blockers. It is the root of all other work.
 
 | # | Task | Area |
 |---|---|---|
-| 4.1 | `Reservation` aggregate: `PENDING → CONFIRMED / EXPIRED / RELEASED` state machine | Domain |
-| 4.2 | `ReservationExpiry` value object with `isExpired()`, `remainingTtl()` | Domain |
-| 4.3 | `POST /api/v1/reservations`: idempotency key check → Lua DECR → DB write (atomic) | API |
-| 4.4 | `resv:lock:{userId}:{saleId}` Redis NX key — 30s guard against duplicate in-flight creation | Redis |
-| 4.5 | Expiry sweep: `@Scheduled` every 30s, `UPDATE WHERE status=PENDING AND expires_at < NOW() RETURNING` | Scheduler |
-| 4.6 | `stock_release.lua` called for every expired reservation — ceiling enforced | Redis |
+| 4.1 | `Reservation` aggregate: `PENDING → CONFIRMED / EXPIRED / RELEASED` state machine | Domain — COMPLETE |
+| 4.2 | `ReservationExpiry` value object with `isExpired()`, `remainingTtl()` | Domain — COMPLETE |
+| 4.3 | `POST /api/v1/reservations`: idempotency key check → Lua DECR → DB write (atomic) | API — COMPLETE |
+| 4.4 | `resv:lock:{userId}:{saleId}` Redis NX key — 30s guard against duplicate in-flight creation | Redis — COMPLETE |
+| 4.5 | Expiry sweep: `@Scheduled` every 30s, `UPDATE WHERE status=PENDING AND expires_at < NOW() RETURNING` | Scheduler — COMPLETE via approved implementation contract |
+| 4.6 | `stock_release.lua` called for every expired reservation — ceiling enforced | Redis — COMPLETE |
 | 4.7 | Integration test (Testcontainers): 1500 concurrent POST requests for 1000-unit sale | Test |
 
 ### Deliverables
@@ -345,6 +352,11 @@ None. This week has no blockers. It is the root of all other work.
 
 **Phase:** Integration
 **Goal:** Events flow end-to-end. A reservation triggers a `StockReserved` Kafka event. The OrderService saga consumer receives it and confirms the reservation. This is the highest-risk week — all three services must work together for the first time.
+
+**Current implementation note (2026-08-12):** Slice 5 completed the
+InventoryService-owned portion of tasks 6.1 and 6.2: its outbox poller and only
+the `inventory-events` topic. Sale/order topics, consumers, ACL translation, and
+the cross-service end-to-end test remain Week 6 work.
 
 ### Objectives
 
