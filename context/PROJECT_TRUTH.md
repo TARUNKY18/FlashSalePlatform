@@ -2,9 +2,9 @@
 ## Flash Sale Platform — Single Source of Truth
 **Version:** 3 (replaces Version 2, 2026-06-17)
 
-> **Implementation status warning (updated 2026-08-12):** Broad historical
+> **Implementation status warning (updated 2026-08-23):** Broad historical
 > implementation-status fields in this document remain stale. The verified
-> Slice 5 facts below have been reconciled; for complete current implementation
+> Slice 6 facts below have been reconciled; for complete current implementation
 > truth, see `HANDOFF.md` and `context/CURRENT_STATE.md`. The architecture, ADR,
 > and design sections remain authoritative. Do not copy any unreconciled
 > "PLANNED — no code" field into implementation decisions.
@@ -134,7 +134,7 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 | Observability | Micrometer, Prometheus, OpenTelemetry, Tempo | `/actuator/prometheus`, 100%/10% trace sampling | PLANNED — no metrics or tracing code written |
 | Load testing | Gatling or k6 | 50,000 concurrent user simulation | PLANNED — no simulation files written |
 | Property-based testing | jqwik 1.9.0 | Applied to Product stock domain model | VERIFIED — 5 properties × 1,000 generated examples in InventoryService; test-only classpath |
-| Integration testing | Testcontainers | Real Postgres/Redis/Kafka in tests | VERIFIED — InventoryService uses PostgreSQL 16.3, Redis 7.2, and a Kafka 3.7-compatible broker; Slice 5 includes real same-endpoint Kafka outage/recovery coverage |
+| Integration testing | Testcontainers | Real Postgres/Redis/Kafka in tests | VERIFIED — InventoryService uses PostgreSQL 16.3, Redis 7.2, and a Kafka 3.7-compatible broker; Slice 5 includes real same-endpoint Kafka outage/recovery coverage, and test-only Slice 6 proves the 1500-request/1000-unit reservation invariant through MockMvc |
 | Migrations | Flyway | — | VERIFIED — V1 in SaleService (`flash_sales`, `sale_schedules`, `sale_status_history`); InventoryService V1 (`products`, `stock_levels`), V2 (`reservations`, `stock_reservation_log`), V3 (`idempotency_key NOT NULL`), V4 (`inventory_outbox`) |
 
 **Package structure (PLANNED — designed, not created):** `com.flashsale.` with subpackages `sale/`, `inventory/`, `order/`, `notification/`, `analytics/`, each following `domain/{aggregate,entity,vo,event}`, `application/`, `infra/`.
@@ -148,7 +148,7 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 | Service | Owns | DB / Schema | Kafka Role | Redis Role | Port | Code Status |
 |---|---|---|---|---|---|---|
 | SaleService | Sale lifecycle, scheduling, status machine | `sales_db` | Producer: `sale-events` | Cache: active sale metadata | 8081 | COMPLETE — Week 2; FlashSale aggregate, REST API, Flyway V1, 16 tests |
-| InventoryService | Stock levels, atomic decrement, pre-warm, reservations | `inventory_db` | Producer: `inventory-events` | Layer 1: stock counter (Lua DECR), pre-warm | 8082 | IN PROGRESS — Week 4 Slices 1–5 complete; 70 production Java files, 318 tests, commit `233ca84` |
+| InventoryService | Stock levels, atomic decrement, pre-warm, reservations | `inventory_db` | Producer: `inventory-events` | Layer 1: stock counter (Lua DECR), pre-warm | 8082 | COMPLETE through Week 4 — Slices 1–6 complete; 70 production Java files, 319 tests, latest implementation commit `8a60df7` |
 | OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PLANNED — zero code written |
 | NotificationService | Email, push, SMS fan-out | None (stateless) | Consumer: all three topics | None | 8084 | PLANNED — zero code written |
 | AnalyticsService | Event ingestion, metrics, dashboards | ClickHouse | Consumer: all three topics | None | 8085 | PLANNED — zero code written |
@@ -170,10 +170,12 @@ HPA trigger: CPU utilisation > 70%.
 
 ## Domain Model
 
-**Status: Reservation lifecycle through Slice 5 is implemented and verified,
-including persistence, REST creation, expiry, and application events backed by
-an infrastructure-owned outbox. The Inventory domain model has no outbox state.
-All other unimplemented aggregates remain planned.**
+**Status: Reservation lifecycle production behavior through Slice 5 is
+implemented and verified, including persistence, REST creation, expiry, and
+application events backed by an infrastructure-owned outbox. Test-only Slice 6
+verifies the 1500-request/1000-unit concurrency invariant without changing that
+behavior. The Inventory domain model has no outbox state. All other unimplemented
+aggregates remain planned.**
 
 **Aggregate roots (4):**
 | Aggregate | Owning service / schema | Core invariant | State machine |

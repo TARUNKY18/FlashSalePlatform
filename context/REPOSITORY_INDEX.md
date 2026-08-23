@@ -160,8 +160,8 @@ downloaded, but whether they were committed to the repository is unknown.
 
 ### `services/inventory-service/` — **Existing**
 
-**Status:** In progress (Week 4, Slice 1 complete). 50 production Java files; 28 test classes; 210 passing tests.
-**Latest commit:** `713d2d2` (`feat(inventory): implement reservation domain aggregate`)
+**Status:** Complete through Week 4. 70 production Java files; 41 test Java files; 319 passing tests.
+**Latest implementation commit:** `8a60df7` (`test(inventory): add slice 6 reservation concurrency test`)
 
 #### Production packages
 
@@ -178,6 +178,8 @@ downloaded, but whether they were committed to the repository is unknown.
 | `com.flashsale.inventory.infra.redis` | 6 | Lua executors and Redis adapters |
 
 #### Test packages
+
+**Slice 6 addition:** `services/inventory-service/src/test/java/com/flashsale/inventory/integration/ReservationConcurrencyIntegrationTest.java` — **Existing**, confirmed by repository inspection; test-only coverage for Build Plan task 4.7.
 
 | Package | Classes | Tests |
 |---|---|---|

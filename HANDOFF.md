@@ -1,8 +1,8 @@
 # Flash Sale Platform — Engineering Handoff
 
-**Handoff date:** 2026-08-12
+**Handoff date:** 2026-08-23
 
-**Current milestone:** Week 4 — Reservation (in progress)
+**Current milestone:** Week 4 — Reservation (complete)
 
 **Week 3 status:** COMPLETE — all implementation slices committed; documentation reconciled
 
@@ -16,16 +16,18 @@
 
 **Week 4, Slice 5 status:** COMPLETE — Inventory transactional outbox, `StockReserved` and `ReservationExpired`, atomic reservation/expiry + outbox persistence, 500 ms multi-pod-safe Kafka publisher, Inventory-owned `inventory-events` topic, real Kafka outage/recovery coverage; frozen contract PASS; 24 new tests; committed `233ca84`; documented in SESSION-015
 
+**Week 4, Slice 6 status:** COMPLETE — Build Plan task 4.7; test-only 1500-request/1000-unit MockMvc concurrency correctness test; frozen contract and 28-point final audit PASS; committed `8a60df7`; documented in SESSION-016
+
 **Branch:** `main`
 
-**Latest commit:** `233ca84` (`week 4 slice 5 completed`), present on `origin/main`
+**Latest commit:** `8a60df7` (`test(inventory): add slice 6 reservation concurrency test`), local on `main`; `origin/main` remains at the Slice 5 documentation commit `b344f54`
 
-**Working tree at reconciliation start:** clean; Slice 5's 22 implementation/test files are committed in `233ca84`.
+**Working tree at reconciliation start:** clean; Slice 6's only implementation file is committed in `8a60df7`.
 
-**Audience:** The senior engineer or Codex session continuing Week 4 development
+**Audience:** The senior engineer or Codex session beginning Week 5 development
 
-Week 3 is complete. Week 4 Slices 1–5 are complete and verified. This handoff
-reflects the post-Slice-5 Week 4 state.
+Week 3 and Week 4 are complete. Week 4 Slices 1–6 are complete and verified.
+This handoff reflects the post-Slice-6 state.
 
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
@@ -217,16 +219,17 @@ these approved implementation commits:
 | `0b4c1c4` | REST + Command Service + Redis guard (Week 4, Slice 3) |
 | `5810c7d` | `stock-release.lua` integration + expiry sweep (Week 4, Slice 4) |
 | `233ca84` | Inventory transactional outbox + Kafka events (Week 4, Slice 5) |
+| `8a60df7` | 1500-request/1000-unit reservation concurrency integration test (Week 4, Slice 6 / task 4.7) |
 
 InventoryService currently contains:
 
 - 70 production Java files.
-- 40 test Java files (39 runnable + `InventoryInfrastructureTestSupport`).
-- 318 passing Inventory tests (334 total including 16 SaleService).
+- 41 test Java files (40 runnable + `InventoryInfrastructureTestSupport`).
+- 319 passing Inventory tests (335 total including 16 SaleService).
 - Four Lua scripts: `stock-decrement.lua`, `stock-projection-sync.lua`, `stock-prewarm.lua`, and `stock-release.lua` (all integrated).
 - Four Flyway migrations: V1 (`products`, `stock_levels`), V2 (`reservations`, `stock_reservation_log`), V3 (`idempotency_key NOT NULL`), V4 (`inventory_outbox`).
 - REST `POST /api/v1/reservations`, expiry sweep, and Inventory Kafka outbox publication are implemented.
-- No reconciliation integration or 1500-concurrent integration test.
+- No stock-reconciliation integration test; the Slice 6 1500-concurrent reservation integration test is implemented.
 
 ## ✔ Skeleton
 
@@ -1461,17 +1464,17 @@ is commit `f12d67d`, already pushed to `origin/main`.
 
 ```text
 Command: ./gradlew clean build
-Result:  BUILD SUCCESSFUL (Slice 5 frozen regression gate)
-Tests:   Inventory 318; 0 failed, 0 errors, 0 skipped
+Result:  BUILD SUCCESSFUL (Slice 6 frozen regression gate)
+Tests:   Inventory 319; 0 failed, 0 errors, 0 skipped
          SaleService 16; 0 failed, 0 errors, 0 skipped
-         Total 334
+         Total 335
 ```
 
 ## Passing test inventory
 
 | Inventory test category | Passing tests |
 |---|---:|
-| Unit/property/integration (all) | 318 |
+| Unit/property/integration (all) | 319 |
 
 The complete repository build also runs 16 passing SaleService tests.
 
@@ -1533,10 +1536,11 @@ Week 3 tasks and were not introduced.
 | Slice 3: REST + Command Service + Redis guard | ✔ DONE | `0b4c1c4`; SESSION-013 |
 | Slice 4: `stock_release.lua` integration + expiry sweep | ✔ DONE | `5810c7d`; SESSION-014 |
 | Slice 5: Inventory outbox + `StockReserved` / `ReservationExpired` | ✔ DONE | `233ca84`; SESSION-015 |
+| Slice 6: 1500-concurrent integration test for a 1000-unit sale (task 4.7) | ✔ DONE | `8a60df7`; SESSION-016 |
 
-**Next planned slice:** Slice 6 — 1500-concurrent integration test for a 1000-unit sale.
+**Next planned milestone:** Week 5 — OrderService: Core + Idempotency.
 
-Remaining Week 4 slice (not yet started): 1500-concurrent integration test.
+No Week 4 implementation slices remain.
 
 ---
 

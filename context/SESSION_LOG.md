@@ -3024,3 +3024,46 @@ Canonical current-state, plan, schema, requirements, domain-event, and Kafka
 references were updated only where the verified Slice 5 implementation made
 their statements stale. The roadmap was not expanded: the next planned Week 4
 slice remains the 1500-concurrent integration test for a 1000-unit sale.
+
+---
+
+## SESSION-016
+**Date:** 2026-08-23
+**Milestone:** Week 4, Slice 6 — Build Plan task 4.7
+**Outcome:** COMPLETE — implementation, verification, final audit, and documentation reconciliation complete
+**Engineer:** Tarun K Y
+
+---
+
+### Implemented scope
+
+- Added exactly one test-only file:
+  `ReservationConcurrencyIntegrationTest.java`.
+- No production, infrastructure, configuration, migration, Lua, dependency,
+  support, or existing-test file changed.
+- Exercised the real MockMvc `POST /api/v1/reservations` endpoint with exactly
+  1500 concurrent quantity-1 requests for one product and sale, using 1500
+  unique user IDs and 1500 unique `X-Idempotency-Key` values.
+- Observed exactly 1000 HTTP `201` responses and 500 HTTP `409 SOLD_OUT`
+  responses, with no duplicate or unexpected outcomes.
+- Verified PostgreSQL authoritative stock 0, StockLevel revision 1000, Product
+  revision 0, and exactly 1000 distinct PENDING reservations with total
+  quantity 1000 and distinct reservation IDs, users, and idempotency keys.
+- Verified exactly 1000 linked `StockReserved` outbox rows and Redis stock 0 /
+  version 1000. Kafka delivery was not tested by this slice.
+- This is a concurrency-correctness integration test, not a performance or
+  production-capacity test. No production fix was required or authorized, and
+  existing production concurrency behavior was unchanged.
+
+### Verification and audit
+
+```text
+Isolated Slice 6 concurrency test: PASS
+InventoryService: 319 passed, 0 failed, 0 errors, 0 skipped
+SaleService:       16 passed, 0 failed, 0 errors, 0 skipped
+Whole project:     335 passed, 0 failed, 0 errors, 0 skipped
+git diff --check:  PASS
+Final read-only audit: PASS — all 28 frozen Slice 6 requirements confirmed
+```
+
+Implementation commit: `8a60df7` (`test(inventory): add slice 6 reservation concurrency test`).

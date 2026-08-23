@@ -223,12 +223,14 @@ None. This week has no blockers. It is the root of all other work.
 **Phase:** Core Services
 **Goal:** The Reservation aggregate is live with its full lifecycle. The partial unique index enforces the "one active reservation per user per sale" invariant. The expiry sweep runs and releases stock.
 
-**Verified implementation status (2026-08-12):** Week 4 Slices 1–5 are
-complete. Slice 5 added the Inventory transactional outbox, `StockReserved` and
-`ReservationExpired`, Inventory-owned `inventory-events` topic configuration,
-and at-least-once publication and recovery tests. Its frozen contract passed
-318 InventoryService tests plus 16 SaleService regressions. The next existing
-Week 4 task is 4.7, the 1500-concurrent integration test; its scope is unchanged.
+**Verified implementation status (2026-08-13):** Week 4 Slices 1–6 are
+complete. Slice 6 completed task 4.7 with the test-only
+`ReservationConcurrencyIntegrationTest`: 1500 concurrent MockMvc reservation
+requests against 1000 units produced exactly 1000 `201` responses and 500
+`409 SOLD_OUT` responses, with the required PostgreSQL, outbox, and Redis
+durable-state assertions. The frozen contract and all 28 audit requirements
+passed; no production behavior changed. The regression gate passed 319
+InventoryService tests plus 16 SaleService tests (335 total).
 
 ### Objectives
 
@@ -247,7 +249,7 @@ Week 4 task is 4.7, the 1500-concurrent integration test; its scope is unchanged
 | 4.4 | `resv:lock:{userId}:{saleId}` Redis NX key — 30s guard against duplicate in-flight creation | Redis — COMPLETE |
 | 4.5 | Expiry sweep: `@Scheduled` every 30s, `UPDATE WHERE status=PENDING AND expires_at < NOW() RETURNING` | Scheduler — COMPLETE via approved implementation contract |
 | 4.6 | `stock_release.lua` called for every expired reservation — ceiling enforced | Redis — COMPLETE |
-| 4.7 | Integration test (Testcontainers): 1500 concurrent POST requests for 1000-unit sale | Test |
+| 4.7 | Integration test (Testcontainers): 1500 concurrent POST requests for 1000-unit sale | Test — COMPLETE |
 
 ### Deliverables
 
@@ -268,7 +270,7 @@ Week 4 task is 4.7, the 1500-concurrent integration test; its scope is unchanged
 [ ] Partial unique index prevents concurrent double-reservation (test with 2 threads, same user/sale)
 [ ] Expiry sweep fires within 30s, changes status to EXPIRED, increments Redis stock
 [ ] stock_release.lua ceiling prevents stock going above totalAllocated on replay
-[ ] Integration test: 1000 stock, 1500 concurrent requests → exactly 1000 successes
+[x] Integration test: 1000 stock, 1500 concurrent requests → exactly 1000 successes
 [ ] ReservationExpiry.isExpired() tested with boundary values (1ms before, 1ms after expiry)
 ```
 

@@ -1,7 +1,7 @@
 # CURRENT_STATE.md
-**Milestone:** Week 4 — Reservation (in progress)
-**Status:** 🟡 IN PROGRESS
-**Date:** 2026-08-12
+**Milestone:** Week 4 — Reservation (complete)
+**Status:** 🟢 COMPLETE
+**Date:** 2026-08-23
 **Engineer:** Tarun K Y
 
 ---
@@ -11,12 +11,12 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `233ca84` — `week 4 slice 5 completed` |
-| Implementation commit status | Week 3 and Week 4 Slices 1–5 implemented, contract-verified, committed, and present on `origin/main` |
+| Latest commit | `8a60df7` — `test(inventory): add slice 6 reservation concurrency test` |
+| Implementation commit status | Week 3 and Week 4 Slices 1–6 implemented and contract-verified; Slices 1–5 are on `origin/main`, and the test-only Slice 6 commit is local |
 | Build | InventoryService build and whole-project clean build both `BUILD SUCCESSFUL` |
 | Production Java files | 70 |
-| Test classes | 40 |
-| Inventory tests | 318 passed, 0 failed, 0 errors, 0 skipped |
+| Test classes | 41 |
+| Inventory tests | 319 passed, 0 failed, 0 errors, 0 skipped |
 | SaleService regression | 16 passed, 0 failed, 0 errors, 0 skipped |
 
 ---
@@ -44,6 +44,7 @@
 | ✔ REST + Command Service (SESSION-013, committed `0b4c1c4`) | V3 Flyway migration (idempotency_key NOT NULL); `Reservation.idempotencyKey` field; `ReservationJpaEntity`/`ReservationPersistenceMapper`/`ReservationRepository` updated for idempotencyKey; `ReservationDuplicateGuardPort`/`ReservationDuplicateGuardUnavailableException`; `RedisReservationDuplicateGuardAdapter` (SET NX EX 30s, `resv:lock:{userId}:{saleId}`); `CreateReservationCommand`, `ReservationCreatedResult` (sealed); `ReservationCommandService` (idempotency→Redis guard→stock decrement→persist); `ReservationController` (POST /api/v1/reservations, 201/200/409/400); `InventoryExceptionHandler`; 3 DTO records; `spring-boot-starter-validation` added; 27 new tests; BUILD SUCCESSFUL 268/268 |
 | ✔ stock_release.lua integration + expiry sweep (SESSION-014, committed `5810c7d`) | `stock-release.lua` KEEPTTL fix (approved CONFLICT-NEW-001); `StockReleasePort`, `StockReleaseUnavailableException`, `StockReleaseResult`; `StockReleaseLuaExecutor`, `RedisStockReleaseAdapter`; `stockReleaseScript` bean; `@EnableScheduling` on `InventoryConfiguration`; `findExpiredPending(Instant)` on `ReservationRepository` application port, Spring Data query, and infra adapter; `ReservationExpiryService` (`@Scheduled(fixedDelay=30_000)`); 26 new tests (unit + integration); BUILD SUCCESSFUL 294/294 Inventory, 310/310 total |
 | ✔ Inventory transactional outbox + Kafka events (SESSION-015, committed `233ca84`) | V4 `inventory_outbox`; infrastructure-only JPA persistence; atomic reservation/expiry + outbox writes; `StockReserved` and `ReservationExpired`; PostgreSQL-authoritative `remainingStock`; post-commit Redis restoration; 500 ms `FOR UPDATE SKIP LOCKED` publisher (100 rows); stable `eventId` at-least-once delivery; `productId` key; Inventory-owned `inventory-events` topic; unsupported persisted event types rejected before any send; real same-endpoint Kafka outage/recovery coverage; 24 new tests; frozen contract PASS |
+| ✔ Reservation Concurrency Integration Test (SESSION-016, committed `8a60df7`) | Test-only `ReservationConcurrencyIntegrationTest`; 1500 concurrent MockMvc POST requests for one 1000-unit product/sale, with unique users and idempotency keys and quantity 1; exactly 1000 `201` and 500 `409 SOLD_OUT`; durable PostgreSQL stock 0/revision 1000/Product revision 0; 1000 distinct PENDING reservations and linked `StockReserved` outbox rows; Redis stock 0/version 1000; all 28 frozen contract requirements passed; no production behavior changed |
 
 ---
 
@@ -52,9 +53,9 @@
 ```text
 ./gradlew clean build
 BUILD SUCCESSFUL
-Inventory: 318 tests passed, 0 failed, 0 errors, 0 skipped
+Inventory: 319 tests passed, 0 failed, 0 errors, 0 skipped
 SaleService: 16 tests passed, 0 failed, 0 errors, 0 skipped
-Total: 334
+Total: 335
 ```
 
 Inventory verification comprises unit, property, and integration tests.
@@ -164,8 +165,8 @@ Week 3 is **COMPLETE**. All implementation slices committed and pushed to `origi
 
 ## Week 4 Status
 
-Week 4 is **IN PROGRESS**. Slices 1–5 are complete, contract-verified, and
-committed through `233ca84`.
+Week 4 is **COMPLETE**. Slices 1–6 are complete and contract-verified. Slice 6
+completed Build Plan task 4.7 as a test-only change committed at `8a60df7`.
 
-Next planned slice:
-- 1500-concurrent integration test (1000-unit sale)
+Next planned milestone:
+- Week 5 — OrderService core + idempotency
