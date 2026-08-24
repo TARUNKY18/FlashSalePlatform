@@ -2,3 +2,4 @@ rootProject.name = 'flash-sale-platform'
 
 include 'services:sale-service'
 include 'services:inventory-service'
+include 'services:order-service'
