@@ -293,6 +293,15 @@ InventoryService tests plus 16 SaleService tests (335 total).
 **Phase:** Core Services
 **Goal:** The `Order` aggregate is implemented with the Transactional Outbox pattern. A retry with the same `Idempotency-Key` returns the original response without creating a duplicate order. The outbox row is written atomically with the order row.
 
+**Verified implementation status (2026-08-24):** Week 5 Slice 1 / task 5.1 is
+complete at commit `567450e4457d5d13be086a6473d54effd2552567`.
+The repository contains the minimal Spring Boot 3.3.4 OrderService bootstrap
+with inherited Java 21, Web, Actuator, virtual threads, configurable port, and
+health/info exposure. It contains no Order domain, API, persistence, messaging,
+or other task 5.2–5.7 behavior and adds no tests. The focused OrderService build
+and whole-project clean build passed; the existing 335-test regression baseline
+remains green.
+
 ### Objectives
 
 - `Order` aggregate with `OutboxEvent` and `IdempotencyRecord` child entities
@@ -304,13 +313,16 @@ InventoryService tests plus 16 SaleService tests (335 total).
 
 | # | Task | Area |
 |---|---|---|
-| 5.1 | Spring Boot project: OrderService with virtual threads | Service |
+| 5.1 | Spring Boot project: OrderService with virtual threads | Service — COMPLETE |
 | 5.2 | `Order` aggregate: `PlaceOrder` command, `PENDING → CONFIRMED / CANCELLED / EXPIRED` | Domain |
 | 5.3 | `IdempotencyRecord` entity: Redis `idem:{userId}:{key}` check → Postgres `idempotency_keys` fallback | Domain |
 | 5.4 | `OutboxEvent` entity: written in same `@Transactional` block as `Order` — never separately | Domain |
 | 5.5 | `POST /api/v1/orders`: `400` if no `Idempotency-Key` header, `202` on success | API |
 | 5.6 | `IdempotencyKey` value object: 24h TTL contract, `isSameRequest()`, `isExpired()` | Domain |
 | 5.7 | Integration test: 5 retries with same key → 1 `orders` row, 1 `order_outbox` row | Test |
+
+**Next authorized task:** 5.2 — `Order` aggregate: `PlaceOrder` command and
+`PENDING → CONFIRMED / CANCELLED / EXPIRED` state machine.
 
 ### Deliverables
 

@@ -2,9 +2,9 @@
 ## Flash Sale Platform — Single Source of Truth
 **Version:** 3 (replaces Version 2, 2026-06-17)
 
-> **Implementation status warning (updated 2026-08-23):** Broad historical
+> **Implementation status warning (updated 2026-08-24):** Broad historical
 > implementation-status fields in this document remain stale. The verified
-> Slice 6 facts below have been reconciled; for complete current implementation
+> Slice 6 and Week 5 Slice 1 facts below have been reconciled; for complete current implementation
 > truth, see `HANDOFF.md` and `context/CURRENT_STATE.md`. The architecture, ADR,
 > and design sections remain authoritative. Do not copy any unreconciled
 > "PLANNED — no code" field into implementation decisions.
@@ -121,9 +121,9 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 **Technology stack:**
 | Layer | Technology | Design detail | Runtime detail |
 |---|---|---|---|
-| Language / runtime | Java 21 | Virtual Threads, sealed interfaces, records | VERIFIED — SaleService and InventoryService both run Java 21 virtual threads |
-| Web framework | Spring Boot 3.3.4 | `spring.threads.virtual.enabled=true` | VERIFIED — Spring Boot 3.3.4; SaleService (8081) and InventoryService (8082) |
-| Build tool | Gradle 8.10 wrapper | multi-module Groovy DSL | VERIFIED — `settings.gradle` includes `sale-service` and `inventory-service`; `./gradlew build` passes |
+| Language / runtime | Java 21 | Virtual Threads, sealed interfaces, records | VERIFIED — SaleService, InventoryService, and the OrderService bootstrap inherit Java 21; virtual threads are enabled |
+| Web framework | Spring Boot 3.3.4 | `spring.threads.virtual.enabled=true` | VERIFIED — Spring Boot 3.3.4; SaleService (8081), InventoryService (8082), and OrderService bootstrap (8083) |
+| Build tool | Gradle 8.10 wrapper | multi-module Groovy DSL | VERIFIED — `settings.gradle` includes `sale-service`, `inventory-service`, and `order-service`; `./gradlew clean build` passes |
 | Messaging | Apache Kafka 3.7.0, KRaft mode | `AUTO_CREATE_TOPICS_ENABLE=false`, `enable.auto.commit=false`, `acks=all` | VERIFIED — `apache/kafka:3.7.0` running; `make health` returned `✓ Kafka broker reachable` confirmed 2026-06-17 |
 | Cache / in-memory | Redis Cluster, 3 primary shards / 1 replica each | AOF `everysec`, `allkeys-lru` | VERIFIED — `redis:7.2.5-alpine`, 6 nodes healthy, `cluster_state:ok` confirmed 2026-06-17 |
 | Relational DB | PostgreSQL 16 | 3 fully isolated instances | VERIFIED running (`postgres:16.3-alpine`, all 3 `pg_isready`) |
@@ -137,19 +137,19 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 | Integration testing | Testcontainers | Real Postgres/Redis/Kafka in tests | VERIFIED — InventoryService uses PostgreSQL 16.3, Redis 7.2, and a Kafka 3.7-compatible broker; Slice 5 includes real same-endpoint Kafka outage/recovery coverage, and test-only Slice 6 proves the 1500-request/1000-unit reservation invariant through MockMvc |
 | Migrations | Flyway | — | VERIFIED — V1 in SaleService (`flash_sales`, `sale_schedules`, `sale_status_history`); InventoryService V1 (`products`, `stock_levels`), V2 (`reservations`, `stock_reservation_log`), V3 (`idempotency_key NOT NULL`), V4 (`inventory_outbox`) |
 
-**Package structure (PLANNED — designed, not created):** `com.flashsale.` with subpackages `sale/`, `inventory/`, `order/`, `notification/`, `analytics/`, each following `domain/{aggregate,entity,vo,event}`, `application/`, `infra/`.
+**Package structure:** `com.flashsale.sale`, `com.flashsale.inventory`, and the minimal `com.flashsale.order` bootstrap exist. Deeper OrderService packages and the NotificationService/AnalyticsService packages remain planned.
 
 ---
 
 ## Services
 
-**Status: SaleService and InventoryService COMPLETE (Week 3). OrderService, NotificationService, AnalyticsService: PLANNED.**
+**Status:** SaleService and InventoryService are complete through their current milestones. OrderService is complete only through Week 5 Slice 1 bootstrap. NotificationService and AnalyticsService remain planned.
 
 | Service | Owns | DB / Schema | Kafka Role | Redis Role | Port | Code Status |
 |---|---|---|---|---|---|---|
 | SaleService | Sale lifecycle, scheduling, status machine | `sales_db` | Producer: `sale-events` | Cache: active sale metadata | 8081 | COMPLETE — Week 2; FlashSale aggregate, REST API, Flyway V1, 16 tests |
 | InventoryService | Stock levels, atomic decrement, pre-warm, reservations | `inventory_db` | Producer: `inventory-events` | Layer 1: stock counter (Lua DECR), pre-warm | 8082 | COMPLETE through Week 4 — Slices 1–6 complete; 70 production Java files, 319 tests, latest implementation commit `8a60df7` |
-| OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PLANNED — zero code written |
+| OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PARTIAL — Slice 1 bootstrap only; no domain, API, persistence, messaging, or tests |
 | NotificationService | Email, push, SMS fan-out | None (stateless) | Consumer: all three topics | None | 8084 | PLANNED — zero code written |
 | AnalyticsService | Event ingestion, metrics, dashboards | ClickHouse | Consumer: all three topics | None | 8085 | PLANNED — zero code written |
 
@@ -197,7 +197,7 @@ aggregates remain planned.**
 
 **Bounded contexts (one per service):** SaleContext, InventoryContext (does not know what a `FlashSale` is), OrderContext (uses `PurchaseIntent`, not "Reservation," via an Anti-Corruption Layer), NotificationContext (Conformist), AnalyticsContext (Conformist).
 
-**The only ACL in the system** is InventoryContext → OrderContext: `Reservation`→`PurchaseIntent`, `ReservationId`→`PurchaseIntentId`, `StockReserved`→`PurchaseConfirmation`, status terms `PENDING/CONFIRMED/EXPIRED`→`OPEN/CONSUMED/LAPSED`. Implemented in `InventoryEventTranslator` inside OrderService's `infra/` package.
+**The only planned ACL in the system** is InventoryContext → OrderContext: `Reservation`→`PurchaseIntent`, `ReservationId`→`PurchaseIntentId`, `StockReserved`→`PurchaseConfirmation`, status terms `PENDING/CONFIRMED/EXPIRED`→`OPEN/CONSUMED/LAPSED`. `InventoryEventTranslator` remains planned; the OrderService bootstrap contains no cross-service behavior.
 
 **Domain event envelope:** `eventId` (UUID v4, dedup key), `eventType`, `eventVersion` (minor = backward-compatible, breaking = new type), `occurredAt`, `aggregateId`, `aggregateType`, `payload`. Consumers must ignore unknown fields.
 
@@ -290,6 +290,9 @@ Location: `FlashSalePlatform/Makefile` — VERIFIED (moved from `deployment/dock
 | `GET /api/v1/sales/{id}/history` | SaleService | Immutable audit trail |
 | `POST /api/v1/reservations` | InventoryService | Requires `Idempotency-Key`; returns `201`/`409 SOLD_OUT`/`409 SALE_NOT_ACTIVE`/`429` |
 | `POST /api/v1/orders` | OrderService | Requires `Idempotency-Key` (`400` if missing); returns `202 Accepted` immediately |
+
+The Week 5 Slice 1 bootstrap intentionally does not implement
+`POST /api/v1/orders`; smoke verification returned HTTP 404.
 
 All mutating endpoints require and propagate a `traceId` (UUID v4) via `X-Trace-Id`. All endpoints require a valid bearer token validated at the API gateway; services trust the gateway-propagated `userId` header and do not re-validate tokens.
 
@@ -460,17 +463,10 @@ Week 1 (infrastructure foundation) is partially verified: Postgres, ClickHouse, 
 | 9 | Observability | AnalyticsService batch-writes to ClickHouse; Prometheus metrics; traceId propagation |
 | 10 | Production Readiness | Helm charts + HPA; Gatling load test at 50k users |
 
-**Current status:** Week 1 in progress (see Runtime Verification). Weeks 2–10 not started — VERIFIED (no service code exists).
+**Current status:** Week 5 is in progress. Build Plan task 5.1 is complete at commit `567450e4457d5d13be086a6473d54effd2552567`; task 5.2 is next.
 
-**Immediate next steps before Week 2:**
-```
-[ ] Run: make up  (confirm Kafka broker healthy after KAFKA_CFG_ fix)
-[ ] Run: make health  (confirm all 5 components green)
-[ ] Run: make redis-cluster-info  (confirm cluster_state:ok)
-[ ] Run: make kafka-topics  (confirm broker accepts connections)
-[ ] Commit current state to git
-[ ] Week 2: SaleService — FlashSale aggregate, Java 21 sealed SaleStatus
-```
+**Immediate next task:** Week 5 / Build Plan task 5.2 — implement the approved
+`Order` aggregate scope only after its contract is frozen.
 
 ---
 

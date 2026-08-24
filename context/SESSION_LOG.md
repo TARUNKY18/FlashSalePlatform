@@ -3067,3 +3067,54 @@ Final read-only audit: PASS — all 28 frozen Slice 6 requirements confirmed
 ```
 
 Implementation commit: `8a60df7` (`test(inventory): add slice 6 reservation concurrency test`).
+
+---
+
+## SESSION-017
+**Date:** 2026-08-24
+**Milestone:** Week 5, Slice 1 — Build Plan task 5.1
+**Outcome:** COMPLETE — implementation committed separately; canonical state documentation reconciled in the working tree
+**Engineer:** Tarun K Y
+**Implementation commit:** `567450e4457d5d13be086a6473d54effd2552567` (`feat(order-service): bootstrap OrderService`)
+
+---
+
+### Implemented scope
+
+- Registered `services:order-service` in `settings.gradle`.
+- Added a minimal Spring Boot 3.3.4 OrderService module using the root Java 21
+  toolchain and only Spring Web and Actuator bootstrap dependencies.
+- Added the standard `OrderServiceApplication` entry point.
+- Configured application name `order-service`, default port `8083` with
+  `ORDER_SERVICE_PORT` override, Spring virtual threads, and health/info
+  Actuator exposure.
+
+### Verification
+
+```text
+Focused OrderService build: PASS
+Whole-project clean build: PASS
+InventoryService: 319 passed, 0 failed, 0 errors, 0 skipped
+SaleService:        16 passed, 0 failed, 0 errors, 0 skipped
+Total:             335 passed, 0 failed, 0 errors, 0 skipped
+git diff --check:  PASS
+```
+
+- OrderService starts without PostgreSQL, Redis, Kafka, or other external
+  infrastructure.
+- `/actuator/health` returned HTTP 200 with `UP`.
+- Default port `8083` and `ORDER_SERVICE_PORT` override were verified.
+- `/api/v1/orders` returned HTTP 404 because no Order API exists.
+- Spring virtual-thread configuration was verified enabled.
+
+### Explicit exclusions
+
+- No Order domain model, business/application logic, controller/API, DTO,
+  repository, persistence, JPA, Flyway, Redis, Kafka, idempotency, outbox,
+  scheduler, cross-service behavior, or tests were added.
+- No task 5.2–5.7 behavior was implemented.
+
+### Next authorized task
+
+- Week 5 / Build Plan task 5.2 — `Order` aggregate: `PlaceOrder` command and
+  `PENDING → CONFIRMED / CANCELLED / EXPIRED` state machine.

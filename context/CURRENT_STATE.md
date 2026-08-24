@@ -1,7 +1,7 @@
 # CURRENT_STATE.md
-**Milestone:** Week 4 — Reservation (complete)
+**Milestone:** Week 5 — OrderService (complete through Slice 1 / Build Plan task 5.1)
 **Status:** 🟢 COMPLETE
-**Date:** 2026-08-23
+**Date:** 2026-08-24
 **Engineer:** Tarun K Y
 
 ---
@@ -11,11 +11,11 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `8a60df7` — `test(inventory): add slice 6 reservation concurrency test` |
-| Implementation commit status | Week 3 and Week 4 Slices 1–6 implemented and contract-verified; Slices 1–5 are on `origin/main`, and the test-only Slice 6 commit is local |
-| Build | InventoryService build and whole-project clean build both `BUILD SUCCESSFUL` |
-| Production Java files | 70 |
-| Test classes | 41 |
+| Latest commit | `567450e4457d5d13be086a6473d54effd2552567` — `feat(order-service): bootstrap OrderService` |
+| Implementation commit status | Week 5 Slice 1 implementation is committed; local `main` and `origin/main` both resolve to `567450e4457d5d13be086a6473d54effd2552567` |
+| Build | Focused OrderService build and whole-project clean build both `BUILD SUCCESSFUL` |
+| Production Java files | 101 total: InventoryService 70, SaleService 30, OrderService bootstrap 1 |
+| Test classes | 43 total; Week 5 Slice 1 added no tests |
 | Inventory tests | 319 passed, 0 failed, 0 errors, 0 skipped |
 | SaleService regression | 16 passed, 0 failed, 0 errors, 0 skipped |
 
@@ -45,18 +45,26 @@
 | ✔ stock_release.lua integration + expiry sweep (SESSION-014, committed `5810c7d`) | `stock-release.lua` KEEPTTL fix (approved CONFLICT-NEW-001); `StockReleasePort`, `StockReleaseUnavailableException`, `StockReleaseResult`; `StockReleaseLuaExecutor`, `RedisStockReleaseAdapter`; `stockReleaseScript` bean; `@EnableScheduling` on `InventoryConfiguration`; `findExpiredPending(Instant)` on `ReservationRepository` application port, Spring Data query, and infra adapter; `ReservationExpiryService` (`@Scheduled(fixedDelay=30_000)`); 26 new tests (unit + integration); BUILD SUCCESSFUL 294/294 Inventory, 310/310 total |
 | ✔ Inventory transactional outbox + Kafka events (SESSION-015, committed `233ca84`) | V4 `inventory_outbox`; infrastructure-only JPA persistence; atomic reservation/expiry + outbox writes; `StockReserved` and `ReservationExpired`; PostgreSQL-authoritative `remainingStock`; post-commit Redis restoration; 500 ms `FOR UPDATE SKIP LOCKED` publisher (100 rows); stable `eventId` at-least-once delivery; `productId` key; Inventory-owned `inventory-events` topic; unsupported persisted event types rejected before any send; real same-endpoint Kafka outage/recovery coverage; 24 new tests; frozen contract PASS |
 | ✔ Reservation Concurrency Integration Test (SESSION-016, committed `8a60df7`) | Test-only `ReservationConcurrencyIntegrationTest`; 1500 concurrent MockMvc POST requests for one 1000-unit product/sale, with unique users and idempotency keys and quantity 1; exactly 1000 `201` and 500 `409 SOLD_OUT`; durable PostgreSQL stock 0/revision 1000/Product revision 0; 1000 distinct PENDING reservations and linked `StockReserved` outbox rows; Redis stock 0/version 1000; all 28 frozen contract requirements passed; no production behavior changed |
+| ✔ OrderService Spring Boot Bootstrap (SESSION-017, committed `567450e`) | Week 5 Slice 1 / task 5.1; minimal Spring Boot 3.3.4 Web/Actuator module; inherited Java 21; virtual threads; `order-service` application name; port 8083 with `ORDER_SERVICE_PORT` override; no domain, API, persistence, messaging, or tests |
 
 ---
 
 ## Verification
 
 ```text
+./gradlew :services:order-service:clean :services:order-service:build
+BUILD SUCCESSFUL
 ./gradlew clean build
 BUILD SUCCESSFUL
 Inventory: 319 tests passed, 0 failed, 0 errors, 0 skipped
 SaleService: 16 tests passed, 0 failed, 0 errors, 0 skipped
 Total: 335
 ```
+
+OrderService smoke verification passed: it starts without external
+infrastructure, binds to port 8083 by default, honors `ORDER_SERVICE_PORT`,
+returns HTTP 200 with `UP` at `/actuator/health`, and returns HTTP 404 for
+`/api/v1/orders`. Spring virtual threads are enabled in effective configuration.
 
 Inventory verification comprises unit, property, and integration tests.
 jqwik is present only on the Inventory test runtime classpath and is absent
@@ -117,6 +125,9 @@ metadata. No release, reconciliation, or additional Kafka table exists.
 - Only `StockReserved` and `ReservationExpired` persisted event types are
   publishable; unsupported, null, blank, or unknown values fail the whole batch
   before the first Kafka send.
+- OrderService exists only as the Week 5 Slice 1 bootstrap. It has no Order
+  domain/business behavior, API, persistence, JPA, Flyway, Redis, Kafka,
+  idempotency, outbox, scheduler, DTO, repository, or cross-service behavior.
 
 ---
 
@@ -168,5 +179,12 @@ Week 3 is **COMPLETE**. All implementation slices committed and pushed to `origi
 Week 4 is **COMPLETE**. Slices 1–6 are complete and contract-verified. Slice 6
 completed Build Plan task 4.7 as a test-only change committed at `8a60df7`.
 
-Next planned milestone:
-- Week 5 — OrderService core + idempotency
+---
+
+## Week 5 Status
+
+Week 5 Slice 1 / Build Plan task 5.1 is **COMPLETE** at `567450e`.
+
+**Next authorized task:** Week 5 / Build Plan task 5.2 — `Order` aggregate:
+`PlaceOrder` command and `PENDING → CONFIRMED / CANCELLED / EXPIRED` state
+machine.

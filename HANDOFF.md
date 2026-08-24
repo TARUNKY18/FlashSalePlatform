@@ -1,8 +1,8 @@
 # Flash Sale Platform — Engineering Handoff
 
-**Handoff date:** 2026-08-23
+**Handoff date:** 2026-08-24
 
-**Current milestone:** Week 4 — Reservation (complete)
+**Current milestone:** Week 5 — OrderService (complete through Slice 1 / Build Plan task 5.1)
 
 **Week 3 status:** COMPLETE — all implementation slices committed; documentation reconciled
 
@@ -18,16 +18,19 @@
 
 **Week 4, Slice 6 status:** COMPLETE — Build Plan task 4.7; test-only 1500-request/1000-unit MockMvc concurrency correctness test; frozen contract and 28-point final audit PASS; committed `8a60df7`; documented in SESSION-016
 
+**Week 5, Slice 1 status:** COMPLETE — Build Plan task 5.1; minimal OrderService Spring Boot bootstrap with virtual threads and basic Actuator configuration; no business behavior or tests; committed `567450e`; documented in SESSION-017
+
 **Branch:** `main`
 
-**Latest commit:** `8a60df7` (`test(inventory): add slice 6 reservation concurrency test`), local on `main`; `origin/main` remains at the Slice 5 documentation commit `b344f54`
+**Latest commit:** `567450e4457d5d13be086a6473d54effd2552567` (`feat(order-service): bootstrap OrderService`); local `main` and `origin/main` both resolve to this commit
 
-**Working tree at reconciliation start:** clean; Slice 6's only implementation file is committed in `8a60df7`.
+**Working tree at reconciliation start:** clean; all four Week 5 Slice 1 implementation paths are committed in `567450e`.
 
-**Audience:** The senior engineer or Codex session beginning Week 5 development
+**Audience:** The senior engineer or Codex session beginning Week 5 / Build Plan task 5.2
 
-Week 3 and Week 4 are complete. Week 4 Slices 1–6 are complete and verified.
-This handoff reflects the post-Slice-6 state.
+Week 3 and Week 4 are complete. Week 4 Slices 1–6 remain complete and verified.
+Week 5 Slice 1 is complete and verified. This handoff reflects the
+post-OrderService-bootstrap state before task 5.2.
 
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
@@ -57,8 +60,8 @@ approved atomic stock-decrement path.
 
 The repository is a Gradle multi-module service repository. The intended platform
 contains SaleService, InventoryService, OrderService, NotificationService, and
-AnalyticsService. SaleService and the approved portion of InventoryService exist
-today.
+AnalyticsService. SaleService, the approved portion of InventoryService, and
+the minimal OrderService bootstrap exist today.
 
 InventoryService follows a hexagonal dependency direction:
 
@@ -220,6 +223,7 @@ these approved implementation commits:
 | `5810c7d` | `stock-release.lua` integration + expiry sweep (Week 4, Slice 4) |
 | `233ca84` | Inventory transactional outbox + Kafka events (Week 4, Slice 5) |
 | `8a60df7` | 1500-request/1000-unit reservation concurrency integration test (Week 4, Slice 6 / task 4.7) |
+| `567450e` | OrderService Spring Boot bootstrap (Week 5, Slice 1 / task 5.1) |
 
 InventoryService currently contains:
 
@@ -1524,6 +1528,23 @@ Week 3 tasks and were not introduced.
 
 ---
 
+# OrderService Current State
+
+- `settings.gradle` registers `services:order-service`.
+- The module is a minimal Spring Boot 3.3.4 Web/Actuator application using the
+  root Java 21 toolchain.
+- The application name is `order-service`; the default port is `8083`,
+  overridable with `ORDER_SERVICE_PORT`.
+- Spring virtual threads are enabled; Actuator exposes health and info.
+- Smoke verification confirmed startup without PostgreSQL, Redis, Kafka, or
+  other external infrastructure and HTTP 200 `UP` at `/actuator/health`.
+- `/api/v1/orders` is not implemented and returned HTTP 404.
+- No Order domain/business behavior, API/controller, DTO, repository,
+  persistence, JPA, Flyway, Redis, Kafka, idempotency, outbox, scheduler,
+  cross-service behavior, or tests were added.
+
+---
+
 # Week 4 Completed Slices
 
 | Slice | Status | Commit / Session |
@@ -1538,9 +1559,19 @@ Week 3 tasks and were not introduced.
 | Slice 5: Inventory outbox + `StockReserved` / `ReservationExpired` | ✔ DONE | `233ca84`; SESSION-015 |
 | Slice 6: 1500-concurrent integration test for a 1000-unit sale (task 4.7) | ✔ DONE | `8a60df7`; SESSION-016 |
 
-**Next planned milestone:** Week 5 — OrderService: Core + Idempotency.
-
 No Week 4 implementation slices remain.
+
+---
+
+# Week 5 Completed Slices
+
+| Slice | Status | Commit / Session |
+|---|---|---|
+| Slice 1: OrderService Spring Boot bootstrap (task 5.1) | ✔ DONE | `567450e`; SESSION-017 |
+
+**Next authorized task:** Week 5 / Build Plan task 5.2 — `Order` aggregate:
+`PlaceOrder` command and `PENDING → CONFIRMED / CANCELLED / EXPIRED` state
+machine.
 
 ---
 
