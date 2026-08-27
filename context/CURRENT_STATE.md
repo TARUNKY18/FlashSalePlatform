@@ -1,7 +1,7 @@
 # CURRENT_STATE.md
-**Milestone:** Week 5 — OrderService (complete through Slice 1 / Build Plan task 5.1)
+**Milestone:** Week 5 — OrderService (complete through Slice 2 / Build Plan task 5.2)
 **Status:** 🟢 COMPLETE
-**Date:** 2026-08-24
+**Date:** 2026-08-28
 **Engineer:** Tarun K Y
 
 ---
@@ -11,12 +11,13 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `567450e4457d5d13be086a6473d54effd2552567` — `feat(order-service): bootstrap OrderService` |
-| Implementation commit status | Week 5 Slice 1 implementation is committed; local `main` and `origin/main` both resolve to `567450e4457d5d13be086a6473d54effd2552567` |
-| Build | Focused OrderService build and whole-project clean build both `BUILD SUCCESSFUL` |
-| Production Java files | 101 total: InventoryService 70, SaleService 30, OrderService bootstrap 1 |
-| Test classes | 43 total; Week 5 Slice 1 added no tests |
-| Inventory tests | 319 passed, 0 failed, 0 errors, 0 skipped |
+| Latest commit | `df6d98ff1b9620a31a03cfdf0d0427aab922d964` — `feat(order): implement task 5.2 order aggregate` |
+| Implementation commit status | Week 5 Slice 2 implementation is committed; local `main` and `origin/main` both resolve to `df6d98ff1b9620a31a03cfdf0d0427aab922d964` |
+| Build | Focused OrderService tests passed; whole-project regression was blocked by local Docker/Testcontainers client initialization |
+| Production Java files | 107 total: InventoryService 70, SaleService 30, OrderService 7 |
+| Test classes | 44 total; Week 5 Slice 2 added `OrderTest` |
+| OrderService tests | 11 passed, 0 failed, 0 errors, 0 skipped |
+| Inventory verification | 259 non-container tests passed; 60 Testcontainers tests could not initialize Docker, so the full 319-test baseline was not re-confirmed |
 | SaleService regression | 16 passed, 0 failed, 0 errors, 0 skipped |
 
 ---
@@ -46,20 +47,23 @@
 | ✔ Inventory transactional outbox + Kafka events (SESSION-015, committed `233ca84`) | V4 `inventory_outbox`; infrastructure-only JPA persistence; atomic reservation/expiry + outbox writes; `StockReserved` and `ReservationExpired`; PostgreSQL-authoritative `remainingStock`; post-commit Redis restoration; 500 ms `FOR UPDATE SKIP LOCKED` publisher (100 rows); stable `eventId` at-least-once delivery; `productId` key; Inventory-owned `inventory-events` topic; unsupported persisted event types rejected before any send; real same-endpoint Kafka outage/recovery coverage; 24 new tests; frozen contract PASS |
 | ✔ Reservation Concurrency Integration Test (SESSION-016, committed `8a60df7`) | Test-only `ReservationConcurrencyIntegrationTest`; 1500 concurrent MockMvc POST requests for one 1000-unit product/sale, with unique users and idempotency keys and quantity 1; exactly 1000 `201` and 500 `409 SOLD_OUT`; durable PostgreSQL stock 0/revision 1000/Product revision 0; 1000 distinct PENDING reservations and linked `StockReserved` outbox rows; Redis stock 0/version 1000; all 28 frozen contract requirements passed; no production behavior changed |
 | ✔ OrderService Spring Boot Bootstrap (SESSION-017, committed `567450e`) | Week 5 Slice 1 / task 5.1; minimal Spring Boot 3.3.4 Web/Actuator module; inherited Java 21; virtual threads; `order-service` application name; port 8083 with `ORDER_SERVICE_PORT` override; no domain, API, persistence, messaging, or tests |
+| ✔ Order Aggregate (SESSION-018, committed `df6d98f`) | Week 5 Slice 2 / task 5.2; framework-free in-memory `Order`; `place(...)` creates version-0 `PENDING`; Order-owned `PurchaseIntentId`; typed `OrderId`/`UserId`/`SaleId`; positive-only `Money`; opaque nonblank string idempotency key; explicit `Instant` creation/transition times; manual `confirm`/`cancel`/`expire`; terminal-state enforcement; 11 focused tests |
 
 ---
 
 ## Verification
 
 ```text
-./gradlew :services:order-service:clean :services:order-service:build
-BUILD SUCCESSFUL
-./gradlew clean build
-BUILD SUCCESSFUL
-Inventory: 319 tests passed, 0 failed, 0 errors, 0 skipped
-SaleService: 16 tests passed, 0 failed, 0 errors, 0 skipped
-Total: 335
+OrderService: 11 passed, 0 failed, 0 errors, 0 skipped
+SaleService:   16 passed, 0 failed, 0 errors, 0 skipped
+Inventory non-container suites: 259 passed, 0 failed, 0 errors, 0 skipped
+Whole-project clean build: BLOCKED — Docker/Testcontainers client initialization
 ```
+
+The full historical baseline remains 319 Inventory tests plus 16 SaleService
+tests (335 total), but it was not re-confirmed for Slice 2. Both full-build
+attempts reached the Inventory suite and reported 60 container-dependent
+failures caused by Docker client initialization; no Task 5.2 assertion failed.
 
 OrderService smoke verification passed: it starts without external
 infrastructure, binds to port 8083 by default, honors `ORDER_SERVICE_PORT`,
@@ -125,9 +129,10 @@ metadata. No release, reconciliation, or additional Kafka table exists.
 - Only `StockReserved` and `ReservationExpired` persisted event types are
   publishable; unsupported, null, blank, or unknown values fail the whole batch
   before the first Kafka send.
-- OrderService exists only as the Week 5 Slice 1 bootstrap. It has no Order
-  domain/business behavior, API, persistence, JPA, Flyway, Redis, Kafka,
-  idempotency, outbox, scheduler, DTO, repository, or cross-service behavior.
+- OrderService contains the Week 5 Slice 1 bootstrap and the framework-free
+  Week 5 Slice 2 `Order` aggregate. It still has no API, persistence, JPA,
+  Flyway, PostgreSQL access, Redis, Kafka, idempotency infrastructure, outbox,
+  scheduler, DTO, repository, or cross-service behavior.
 
 ---
 
@@ -185,6 +190,8 @@ completed Build Plan task 4.7 as a test-only change committed at `8a60df7`.
 
 Week 5 Slice 1 / Build Plan task 5.1 is **COMPLETE** at `567450e`.
 
-**Next authorized task:** Week 5 / Build Plan task 5.2 — `Order` aggregate:
-`PlaceOrder` command and `PENDING → CONFIRMED / CANCELLED / EXPIRED` state
-machine.
+Week 5 Slice 2 / Build Plan task 5.2 is **COMPLETE** at `df6d98f`.
+
+**Next sequential task:** Week 5 / Build Plan task 5.3 — `IdempotencyRecord`
+and dual-layer idempotency. Its contract must resolve `CONFLICT-002` before
+implementation.

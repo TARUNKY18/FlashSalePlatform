@@ -2,9 +2,9 @@
 ## Flash Sale Platform — Single Source of Truth
 **Version:** 3 (replaces Version 2, 2026-06-17)
 
-> **Implementation status warning (updated 2026-08-24):** Broad historical
+> **Implementation status warning (updated 2026-08-28):** Broad historical
 > implementation-status fields in this document remain stale. The verified
-> Slice 6 and Week 5 Slice 1 facts below have been reconciled; for complete current implementation
+> Slice 6 and Week 5 Slices 1–2 facts below have been reconciled; for complete current implementation
 > truth, see `HANDOFF.md` and `context/CURRENT_STATE.md`. The architecture, ADR,
 > and design sections remain authoritative. Do not copy any unreconciled
 > "PLANNED — no code" field into implementation decisions.
@@ -121,9 +121,9 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 **Technology stack:**
 | Layer | Technology | Design detail | Runtime detail |
 |---|---|---|---|
-| Language / runtime | Java 21 | Virtual Threads, sealed interfaces, records | VERIFIED — SaleService, InventoryService, and the OrderService bootstrap inherit Java 21; virtual threads are enabled |
-| Web framework | Spring Boot 3.3.4 | `spring.threads.virtual.enabled=true` | VERIFIED — Spring Boot 3.3.4; SaleService (8081), InventoryService (8082), and OrderService bootstrap (8083) |
-| Build tool | Gradle 8.10 wrapper | multi-module Groovy DSL | VERIFIED — `settings.gradle` includes `sale-service`, `inventory-service`, and `order-service`; `./gradlew clean build` passes |
+| Language / runtime | Java 21 | Virtual Threads, sealed interfaces, records | VERIFIED — SaleService, InventoryService, and OrderService inherit Java 21; virtual threads are enabled |
+| Web framework | Spring Boot 3.3.4 | `spring.threads.virtual.enabled=true` | VERIFIED — Spring Boot 3.3.4; SaleService (8081), InventoryService (8082), and OrderService (8083) |
+| Build tool | Gradle 8.10 wrapper | multi-module Groovy DSL | VERIFIED — `settings.gradle` includes `sale-service`, `inventory-service`, and `order-service`; the last Slice 2 full rerun was blocked by local Docker/Testcontainers initialization, while focused Order tests passed |
 | Messaging | Apache Kafka 3.7.0, KRaft mode | `AUTO_CREATE_TOPICS_ENABLE=false`, `enable.auto.commit=false`, `acks=all` | VERIFIED — `apache/kafka:3.7.0` running; `make health` returned `✓ Kafka broker reachable` confirmed 2026-06-17 |
 | Cache / in-memory | Redis Cluster, 3 primary shards / 1 replica each | AOF `everysec`, `allkeys-lru` | VERIFIED — `redis:7.2.5-alpine`, 6 nodes healthy, `cluster_state:ok` confirmed 2026-06-17 |
 | Relational DB | PostgreSQL 16 | 3 fully isolated instances | VERIFIED running (`postgres:16.3-alpine`, all 3 `pg_isready`) |
@@ -137,19 +137,25 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 | Integration testing | Testcontainers | Real Postgres/Redis/Kafka in tests | VERIFIED — InventoryService uses PostgreSQL 16.3, Redis 7.2, and a Kafka 3.7-compatible broker; Slice 5 includes real same-endpoint Kafka outage/recovery coverage, and test-only Slice 6 proves the 1500-request/1000-unit reservation invariant through MockMvc |
 | Migrations | Flyway | — | VERIFIED — V1 in SaleService (`flash_sales`, `sale_schedules`, `sale_status_history`); InventoryService V1 (`products`, `stock_levels`), V2 (`reservations`, `stock_reservation_log`), V3 (`idempotency_key NOT NULL`), V4 (`inventory_outbox`) |
 
-**Package structure:** `com.flashsale.sale`, `com.flashsale.inventory`, and the minimal `com.flashsale.order` bootstrap exist. Deeper OrderService packages and the NotificationService/AnalyticsService packages remain planned.
+**Package structure:** `com.flashsale.sale`, `com.flashsale.inventory`, and
+`com.flashsale.order` exist. OrderService currently has its bootstrap plus
+`domain.aggregate` and `domain.vo`; application, API, and infrastructure
+packages remain planned. NotificationService and AnalyticsService packages
+remain planned.
 
 ---
 
 ## Services
 
-**Status:** SaleService and InventoryService are complete through their current milestones. OrderService is complete only through Week 5 Slice 1 bootstrap. NotificationService and AnalyticsService remain planned.
+**Status:** SaleService and InventoryService are complete through their current
+milestones. OrderService is complete through Week 5 Slice 2. NotificationService
+and AnalyticsService remain planned.
 
 | Service | Owns | DB / Schema | Kafka Role | Redis Role | Port | Code Status |
 |---|---|---|---|---|---|---|
 | SaleService | Sale lifecycle, scheduling, status machine | `sales_db` | Producer: `sale-events` | Cache: active sale metadata | 8081 | COMPLETE — Week 2; FlashSale aggregate, REST API, Flyway V1, 16 tests |
 | InventoryService | Stock levels, atomic decrement, pre-warm, reservations | `inventory_db` | Producer: `inventory-events` | Layer 1: stock counter (Lua DECR), pre-warm | 8082 | COMPLETE through Week 4 — Slices 1–6 complete; 70 production Java files, 319 tests, latest implementation commit `8a60df7` |
-| OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PARTIAL — Slice 1 bootstrap only; no domain, API, persistence, messaging, or tests |
+| OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PARTIAL — Slices 1–2 complete; bootstrap plus framework-free Order domain and 11 focused tests; no API, persistence, messaging, or idempotency infrastructure |
 | NotificationService | Email, push, SMS fan-out | None (stateless) | Consumer: all three topics | None | 8084 | PLANNED — zero code written |
 | AnalyticsService | Event ingestion, metrics, dashboards | ClickHouse | Consumer: all three topics | None | 8085 | PLANNED — zero code written |
 
@@ -174,8 +180,9 @@ HPA trigger: CPU utilisation > 70%.
 implemented and verified, including persistence, REST creation, expiry, and
 application events backed by an infrastructure-owned outbox. Test-only Slice 6
 verifies the 1500-request/1000-unit concurrency invariant without changing that
-behavior. The Inventory domain model has no outbox state. All other unimplemented
-aggregates remain planned.**
+behavior. The Inventory domain model has no outbox state. The in-memory Order
+aggregate is implemented through Week 5 Slice 2; its later persistence,
+idempotency, outbox, API, and integration behavior remains planned.**
 
 **Aggregate roots (4):**
 | Aggregate | Owning service / schema | Core invariant | State machine |
@@ -185,6 +192,15 @@ aggregates remain planned.**
 | `Reservation` | InventoryService / `inventory_db` | Holds stock for exactly one user for a finite window; max one active reservation per user per sale | `PENDING → CONFIRMED / EXPIRED / RELEASED` |
 | `Order` | OrderService / `orders_db` | Exactly one `Order` per `IdempotencyKey` | `PENDING → CONFIRMED / CANCELLED / EXPIRED` |
 
+**Implemented Order scope (Week 5 Slice 2):** `Order.place(...)` creates a
+version-0 `PENDING` in-memory aggregate. Creation and transition times are
+explicit `Instant` values. Manual `confirm`, `cancel`, and `expire` commands
+transition only from `PENDING`; `CONFIRMED`, `CANCELLED`, and `EXPIRED` are
+terminal, and rejected transitions do not mutate state. `cancel` requires a
+non-null/nonblank reason without a fixed vocabulary; timeout maps to `expire`.
+No durable uniqueness, cache, persistence, API, event, outbox, or scheduler
+behavior exists yet.
+
 **Entities:**
 | Entity | Inside aggregate | Identity | Note |
 |---|---|---|---|
@@ -193,11 +209,22 @@ aggregates remain planned.**
 | `OutboxEvent` | `Order` | `outboxEventId` | Written in the same transaction as the order |
 | `IdempotencyRecord` | `Order` | `idempotencyKey` | Two-layer: Redis (24h TTL) + Postgres |
 
-**Value objects (Java 21 records with validating compact constructors):** `SaleId`/`ProductId`/`OrderId`/`ReservationId`/`UserId` (typed UUID wrappers), `SaleWindow` (`end` strictly after `start`), `StockCount` (≥0), `Quantity` (≥1), `ReservationExpiry` (future at creation), `Money` (≥0, currency required), `IdempotencyKey` (UUID v4, 24h TTL contract).
+**Value objects (Java 21 records with validating compact constructors):**
+`SaleId`/`ProductId`/`OrderId`/`ReservationId`/`PurchaseIntentId`/`UserId`
+(typed UUID wrappers), `SaleWindow` (`end` strictly after `start`), `StockCount`
+(≥0), `Quantity` (≥1), `ReservationExpiry` (future at creation), and `Money`
+(Order implementation requires amount > 0 and currency). The planned canonical
+`IdempotencyKey` value object and 24-hour TTL remain task 5.6; Slice 2 stores
+only an opaque non-null/nonblank string.
 
 **Bounded contexts (one per service):** SaleContext, InventoryContext (does not know what a `FlashSale` is), OrderContext (uses `PurchaseIntent`, not "Reservation," via an Anti-Corruption Layer), NotificationContext (Conformist), AnalyticsContext (Conformist).
 
-**The only planned ACL in the system** is InventoryContext → OrderContext: `Reservation`→`PurchaseIntent`, `ReservationId`→`PurchaseIntentId`, `StockReserved`→`PurchaseConfirmation`, status terms `PENDING/CONFIRMED/EXPIRED`→`OPEN/CONSUMED/LAPSED`. `InventoryEventTranslator` remains planned; the OrderService bootstrap contains no cross-service behavior.
+**The only planned ACL in the system** is InventoryContext → OrderContext:
+`Reservation`→`PurchaseIntent`, `ReservationId`→`PurchaseIntentId`,
+`StockReserved`→`PurchaseConfirmation`, status terms
+`PENDING/CONFIRMED/EXPIRED`→`OPEN/CONSUMED/LAPSED`. `PurchaseIntentId` now exists
+inside OrderContext; `InventoryEventTranslator` and all cross-service behavior
+remain planned.
 
 **Domain event envelope:** `eventId` (UUID v4, dedup key), `eventType`, `eventVersion` (minor = backward-compatible, breaking = new type), `occurredAt`, `aggregateId`, `aggregateType`, `payload`. Consumers must ignore unknown fields.
 
@@ -291,7 +318,7 @@ Location: `FlashSalePlatform/Makefile` — VERIFIED (moved from `deployment/dock
 | `POST /api/v1/reservations` | InventoryService | Requires `Idempotency-Key`; returns `201`/`409 SOLD_OUT`/`409 SALE_NOT_ACTIVE`/`429` |
 | `POST /api/v1/orders` | OrderService | Requires `Idempotency-Key` (`400` if missing); returns `202 Accepted` immediately |
 
-The Week 5 Slice 1 bootstrap intentionally does not implement
+Week 5 Slices 1–2 intentionally do not implement
 `POST /api/v1/orders`; smoke verification returned HTTP 404.
 
 All mutating endpoints require and propagate a `traceId` (UUID v4) via `X-Trace-Id`. All endpoints require a valid bearer token validated at the API gateway; services trust the gateway-propagated `userId` header and do not re-validate tokens.
@@ -463,10 +490,13 @@ Week 1 (infrastructure foundation) is partially verified: Postgres, ClickHouse, 
 | 9 | Observability | AnalyticsService batch-writes to ClickHouse; Prometheus metrics; traceId propagation |
 | 10 | Production Readiness | Helm charts + HPA; Gatling load test at 50k users |
 
-**Current status:** Week 5 is in progress. Build Plan task 5.1 is complete at commit `567450e4457d5d13be086a6473d54effd2552567`; task 5.2 is next.
+**Current status:** Week 5 is in progress. Build Plan tasks 5.1 and 5.2 are
+complete; task 5.2 is committed at
+`df6d98ff1b9620a31a03cfdf0d0427aab922d964`.
 
-**Immediate next task:** Week 5 / Build Plan task 5.2 — implement the approved
-`Order` aggregate scope only after its contract is frozen.
+**Immediate next task:** Week 5 / Build Plan task 5.3 — define and approve the
+`IdempotencyRecord`/dual-layer idempotency contract, resolving `CONFLICT-002`
+before implementation.
 
 ---
 

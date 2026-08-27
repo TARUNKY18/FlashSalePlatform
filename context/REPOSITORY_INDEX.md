@@ -1,6 +1,7 @@
 # REPOSITORY_INDEX.md
 ## Flash Sale Platform — Repository Directory Index
 **Generated:** 2026-06-17
+**Updated:** 2026-08-28 — Week 5 Slice 2 / task 5.2
 **Basis:** IDE screenshot, terminal output, explicit file confirmations.
 **Rule:** No directory or file is listed unless its existence is confirmed.
 
@@ -13,7 +14,7 @@
 | `Makefile` | **Existing** | `make up` / `make clean` / `make health` execute from this directory |
 | `deployment/` | **Existing** | Visible in IDE screenshot |
 | `docs/` | **Existing** | Visible in IDE screenshot (collapsed — contents unconfirmed) |
-| `services/` | **Existing** | SaleService, InventoryService, and the Week 5 Slice 1 OrderService bootstrap exist |
+| `services/` | **Existing** | SaleService, InventoryService, and OrderService through Week 5 Slice 2 exist |
 | `testing/` | **Planned** | Not visible in screenshot; no test code written |
 | `benchmarks/` | **Planned** | Not visible in screenshot; no load tests written |
 | `incidents/` | **Planned** | Not visible in screenshot; PM-001 generated but placement unconfirmed |
@@ -139,7 +140,7 @@ downloaded, but whether they were committed to the repository is unknown.
 **Purpose:** One subdirectory per bounded context. No shared code between services.
 **Owner:** Each service owned independently.
 **Status:** SaleService and InventoryService are implemented through their
-current milestones. OrderService bootstrap is complete through Week 5 Slice 1.
+current milestones. OrderService is complete through Week 5 Slice 2.
 NotificationService and AnalyticsService remain pending.
 **Dependencies:** Requires `deployment/docker/` working (Week 1 ✅).
 
@@ -147,7 +148,7 @@ NotificationService and AnalyticsService remain pending.
 |---|---|---|
 | `services/sale-service/` | **Existing** | Week 2 — complete |
 | `services/inventory-service/` | **Existing** | Week 3 — complete |
-| `services/order-service/` | **Existing — bootstrap only** | Week 5 Slice 1 / task 5.1 complete |
+| `services/order-service/` | **Existing** | Week 5 Slices 1–2 / tasks 5.1–5.2 complete |
 | `services/notification-service/` | **Planned** | Week 8 |
 | `services/analytics-service/` | **Planned** | Week 9 |
 
@@ -206,18 +207,24 @@ NotificationService and AnalyticsService remain pending.
 
 ### `services/order-service/` — **Existing**
 
-**Status:** Week 5 Slice 1 / Build Plan task 5.1 bootstrap complete at commit
-`567450e4457d5d13be086a6473d54effd2552567`.
+**Status:** Week 5 Slice 2 / Build Plan task 5.2 complete at commit
+`df6d98ff1b9620a31a03cfdf0d0427aab922d964`.
 
 - `build.gradle` — minimal Spring Boot 3.3.4 module with Web and Actuator; Java
-  21 is inherited from the root toolchain.
-- `src/main/java/com/flashsale/order/OrderServiceApplication.java` — standard
-  Spring Boot entry point only.
+  21 is inherited from the root toolchain; standard test starter is test-only.
+- `src/main/java/com/flashsale/order/OrderServiceApplication.java` — Spring
+  Boot entry point.
+- `src/main/java/com/flashsale/order/domain/aggregate/Order.java` — existing
+  framework-free aggregate root and state machine.
+- `src/main/java/com/flashsale/order/domain/vo/` — existing `OrderId`,
+  `PurchaseIntentId`, `UserId`, `SaleId`, and `Money` records.
+- `src/test/java/com/flashsale/order/domain/aggregate/OrderTest.java` — existing
+  focused domain test class (11 tests).
 - `src/main/resources/application.yml` — application name `order-service`, port
   `8083` with `ORDER_SERVICE_PORT` override, virtual threads, and health/info
   Actuator exposure.
-- No Order domain, API, application, persistence, messaging, or test code
-  exists.
+- No Order API, application service, persistence, messaging, outbox,
+  idempotency infrastructure, or scheduler code exists.
 
 ---
 
@@ -280,7 +287,7 @@ session but placement is unconfirmed.
 | `docs/` | **Existing — contents unconfirmed** | Reference only |
 | `deployment/helm/` | **Planned** | All 5 services (Week 10) |
 | `deployment/terraform/` | **Planned** | AWS infrastructure (Week 10) |
-| `services/` | **Existing** | SaleService, InventoryService, and OrderService bootstrap |
+| `services/` | **Existing** | SaleService, InventoryService, and OrderService through Slice 2 |
 | `testing/` | **Planned** | All 5 services |
 | `benchmarks/` | **Planned** | All 5 services |
 | `incidents/` | **Planned** | Platform ops |
@@ -288,4 +295,5 @@ session but placement is unconfirmed.
 **Existing directories: 5**
 **Planned directories: 16**
 **Java service modules present: 3 of 5** — SaleService and InventoryService are
-implemented through their current milestones; OrderService is bootstrap-only.
+implemented through their current milestones; OrderService is complete through
+Week 5 Slice 2.

@@ -3118,3 +3118,59 @@ git diff --check:  PASS
 
 - Week 5 / Build Plan task 5.2 — `Order` aggregate: `PlaceOrder` command and
   `PENDING → CONFIRMED / CANCELLED / EXPIRED` state machine.
+
+---
+
+## SESSION-018
+**Date:** 2026-08-28
+**Milestone:** Week 5, Slice 2 — Build Plan task 5.2
+**Outcome:** COMPLETE — implementation committed separately; canonical state documentation reconciled in the working tree
+**Engineer:** Tarun K Y
+**Implementation commit:** `df6d98ff1b9620a31a03cfdf0d0427aab922d964` (`feat(order): implement task 5.2 order aggregate`)
+
+---
+
+### Implemented scope
+
+- Added a framework-free, in-memory `Order` aggregate. `place(...)` generates
+  an `OrderId` and creates version-0 `PENDING` state.
+- Added Order-owned `PurchaseIntentId` plus OrderContext `OrderId`, `UserId`,
+  `SaleId`, and positive-only `Money` records. No InventoryService type is
+  imported.
+- Stored the required idempotency key only as an opaque non-null/nonblank
+  string. UUID/TTL behavior remains task 5.6; lookup scope remains unresolved
+  under `CONFLICT-002` for task 5.3.
+- Used explicit `Instant` values for creation and transitions. Manual
+  `confirm`, `cancel`, and `expire` operations permit only direct transitions
+  from `PENDING`; `CONFIRMED`, `CANCELLED`, and `EXPIRED` are terminal.
+- Added the project-standard test starter in test scope and one focused
+  `OrderTest` class with 11 passing tests.
+
+### Verification
+
+```text
+OrderService: 11 passed, 0 failed, 0 errors, 0 skipped
+SaleService:   16 passed, 0 failed, 0 errors, 0 skipped
+Inventory non-container suites: 259 passed, 0 failed, 0 errors, 0 skipped
+Whole-project clean build: BLOCKED — Docker/Testcontainers client initialization
+Final read-only code review: PASS
+```
+
+- The full historical baseline of 319 Inventory tests plus 16 SaleService tests
+  (335 total) was not re-confirmed. Both full-build attempts reported 60
+  container-dependent Inventory failures because Docker could not initialize;
+  no Task 5.2 test failed.
+
+### Explicit exclusions
+
+- No persistence, PostgreSQL, Redis, Kafka, outbox, API/controller, DTO,
+  scheduling, repository, cross-service, InventoryService, or SaleService
+  behavior was added.
+- `OutboxEvent`, `IdempotencyRecord`, the canonical `IdempotencyKey` value
+  object, TTL/cache/uniqueness semantics, and all task 5.3–5.7 behavior remain
+  unimplemented.
+
+### Next sequential task
+
+- Week 5 / Build Plan task 5.3 — freeze the `IdempotencyRecord`/dual-layer
+  idempotency contract and resolve `CONFLICT-002` before implementation.

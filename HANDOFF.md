@@ -1,8 +1,8 @@
 # Flash Sale Platform — Engineering Handoff
 
-**Handoff date:** 2026-08-24
+**Handoff date:** 2026-08-28
 
-**Current milestone:** Week 5 — OrderService (complete through Slice 1 / Build Plan task 5.1)
+**Current milestone:** Week 5 — OrderService (complete through Slice 2 / Build Plan task 5.2)
 
 **Week 3 status:** COMPLETE — all implementation slices committed; documentation reconciled
 
@@ -20,29 +20,30 @@
 
 **Week 5, Slice 1 status:** COMPLETE — Build Plan task 5.1; minimal OrderService Spring Boot bootstrap with virtual threads and basic Actuator configuration; no business behavior or tests; committed `567450e`; documented in SESSION-017
 
+**Week 5, Slice 2 status:** COMPLETE — Build Plan task 5.2; framework-free in-memory `Order` aggregate, Order-owned `PurchaseIntentId`, required typed IDs, positive-only `Money`, opaque string idempotency key, explicit `Instant` timestamps, and terminal state machine; 11 focused tests; committed `df6d98f`; documented in SESSION-018
+
 **Branch:** `main`
 
-**Latest commit:** `567450e4457d5d13be086a6473d54effd2552567` (`feat(order-service): bootstrap OrderService`); local `main` and `origin/main` both resolve to this commit
+**Latest commit:** `df6d98ff1b9620a31a03cfdf0d0427aab922d964` (`feat(order): implement task 5.2 order aggregate`); local `main` and `origin/main` both resolve to this commit
 
-**Working tree at reconciliation start:** clean; all four Week 5 Slice 1 implementation paths are committed in `567450e`.
+**Working tree at reconciliation start:** clean; all eight Week 5 Slice 2 implementation paths are committed in `df6d98f`.
 
-**Audience:** The senior engineer or Codex session beginning Week 5 / Build Plan task 5.2
+**Audience:** The senior engineer or Codex session preparing Week 5 / Build Plan task 5.3
 
 Week 3 and Week 4 are complete. Week 4 Slices 1–6 remain complete and verified.
-Week 5 Slice 1 is complete and verified. This handoff reflects the
-post-OrderService-bootstrap state before task 5.2.
+Week 5 Slices 1–2 are complete. This handoff reflects the committed Order
+domain state before task 5.3. The focused Task 5.2 checks passed; the full
+335-test regression was blocked by local Docker/Testcontainers initialization.
 
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
 ADR-020 (Pre-Warm Architecture) is now approved at Revision 2 following
 independent architecture review of six findings, all resolved.
 
-> **Documentation drift warning:** `context/PROJECT_TRUTH.md` and
-> `context/REPOSITORY_INDEX.md` still contain stale implementation status.
-> Until they are reconciled, current source code, this handoff,
-> `context/CURRENT_STATE.md`, and `SESSION-003` through `SESSION-007` in
-> `context/SESSION_LOG.md` are the verified implementation evidence. Do not copy
-> stale planned fields or structures into code.
+> **Documentation drift warning:** Week 5 Slice 2 facts are reconciled across
+> the canonical state documents, but broad historical status fields may still
+> lag current source. Repository source and Git remain implementation authority;
+> do not copy stale planned fields or structures into code.
 
 ---
 
@@ -61,7 +62,7 @@ approved atomic stock-decrement path.
 The repository is a Gradle multi-module service repository. The intended platform
 contains SaleService, InventoryService, OrderService, NotificationService, and
 AnalyticsService. SaleService, the approved portion of InventoryService, and
-the minimal OrderService bootstrap exist today.
+OrderService through its framework-free Order domain slice exist today.
 
 InventoryService follows a hexagonal dependency direction:
 
@@ -224,6 +225,7 @@ these approved implementation commits:
 | `233ca84` | Inventory transactional outbox + Kafka events (Week 4, Slice 5) |
 | `8a60df7` | 1500-request/1000-unit reservation concurrency integration test (Week 4, Slice 6 / task 4.7) |
 | `567450e` | OrderService Spring Boot bootstrap (Week 5, Slice 1 / task 5.1) |
+| `df6d98f` | Order aggregate and state machine (Week 5, Slice 2 / task 5.2) |
 
 InventoryService currently contains:
 
@@ -1539,9 +1541,20 @@ Week 3 tasks and were not introduced.
 - Smoke verification confirmed startup without PostgreSQL, Redis, Kafka, or
   other external infrastructure and HTTP 200 `UP` at `/actuator/health`.
 - `/api/v1/orders` is not implemented and returned HTTP 404.
-- No Order domain/business behavior, API/controller, DTO, repository,
-  persistence, JPA, Flyway, Redis, Kafka, idempotency, outbox, scheduler,
-  cross-service behavior, or tests were added.
+- `Order.place(...)` creates a version-0 `PENDING` aggregate with an Order-owned
+  `PurchaseIntentId`, typed `OrderId`/`UserId`/`SaleId`, positive-only `Money`,
+  an opaque non-null/nonblank string idempotency key, and explicit creation time.
+- Manual `confirm(Instant)`, `cancel(String, Instant)`, and `expire(Instant)`
+  transition only `PENDING` to terminal `CONFIRMED`, `CANCELLED`, or `EXPIRED`;
+  invalid transitions fail without mutation.
+- Task 5.2 added one test-only standard starter and 11 focused domain tests.
+- No API/controller, DTO, repository, persistence, JPA, Flyway, PostgreSQL
+  access, Redis, Kafka, idempotency uniqueness/cache/TTL behavior, outbox,
+  scheduler, cross-service behavior, or task 5.3–5.7 scaffolding was added.
+- Verification: 11 OrderService tests, 16 SaleService tests, and 259 Inventory
+  non-container tests passed. The full historical 335-test regression was not
+  re-confirmed because Docker client initialization blocked 60 existing
+  Inventory Testcontainers tests.
 
 ---
 
@@ -1568,10 +1581,11 @@ No Week 4 implementation slices remain.
 | Slice | Status | Commit / Session |
 |---|---|---|
 | Slice 1: OrderService Spring Boot bootstrap (task 5.1) | ✔ DONE | `567450e`; SESSION-017 |
+| Slice 2: Order aggregate and state machine (task 5.2) | ✔ DONE | `df6d98f`; SESSION-018 |
 
-**Next authorized task:** Week 5 / Build Plan task 5.2 — `Order` aggregate:
-`PlaceOrder` command and `PENDING → CONFIRMED / CANCELLED / EXPIRED` state
-machine.
+**Next sequential task:** Week 5 / Build Plan task 5.3 — `IdempotencyRecord`
+and dual-layer idempotency. Freeze the task contract and resolve
+`CONFLICT-002` before implementation.
 
 ---
 
