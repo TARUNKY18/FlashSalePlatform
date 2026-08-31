@@ -24,7 +24,7 @@
 
 **Branch:** `main`
 
-**Latest commit:** `df6d98ff1b9620a31a03cfdf0d0427aab922d964` (`feat(order): implement task 5.2 order aggregate`); local `main` and `origin/main` both resolve to this commit
+**Latest commit:** `86a9c5cbef10fe5e73abab97a9b69413280f3187` (`docs: update task 5.2 documentation`); local `main` and `origin/main` both resolve to this commit
 
 **Working tree at reconciliation start:** clean; all eight Week 5 Slice 2 implementation paths are committed in `df6d98f`.
 

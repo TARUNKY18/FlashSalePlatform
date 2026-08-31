@@ -11,8 +11,8 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `df6d98ff1b9620a31a03cfdf0d0427aab922d964` — `feat(order): implement task 5.2 order aggregate` |
-| Implementation commit status | Week 5 Slice 2 implementation is committed; local `main` and `origin/main` both resolve to `df6d98ff1b9620a31a03cfdf0d0427aab922d964` |
+| Latest commit | `86a9c5cbef10fe5e73abab97a9b69413280f3187` — `docs: update task 5.2 documentation` |
+| Implementation commit status | Week 5 Slice 2 implementation is committed at `df6d98ff1b9620a31a03cfdf0d0427aab922d964`; local `main` and `origin/main` both resolve to `86a9c5cbef10fe5e73abab97a9b69413280f3187` |
 | Build | Focused OrderService tests passed; whole-project regression was blocked by local Docker/Testcontainers client initialization |
 | Production Java files | 107 total: InventoryService 70, SaleService 30, OrderService 7 |
 | Test classes | 44 total; Week 5 Slice 2 added `OrderTest` |
