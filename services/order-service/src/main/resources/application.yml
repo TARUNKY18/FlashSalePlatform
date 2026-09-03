@@ -5,6 +5,9 @@ spring:
   application:
     name: order-service
 
+  profiles:
+    default: bootstrap
+
   threads:
     virtual:
       enabled: true
@@ -14,3 +17,46 @@ management:
     web:
       exposure:
         include: health,info
+
+---
+spring:
+  config:
+    activate:
+      on-profile: bootstrap
+
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration
+      - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+
+---
+spring:
+  config:
+    activate:
+      on-profile: infrastructure
+
+  datasource:
+    url: ${ORDER_SERVICE_DB_URL:jdbc:postgresql://localhost:5434/orders_db}
+    username: ${ORDER_SERVICE_DB_USER:flashsale}
+    password: ${ORDER_SERVICE_DB_PASSWORD:flashsale_dev}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+
+  data:
+    redis:
+      password: ${REDIS_PASSWORD:redis_dev}
+      cluster:
+        nodes: ${SPRING_DATA_REDIS_CLUSTER_NODES:localhost:7001,localhost:7002,localhost:7003}
