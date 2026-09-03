@@ -233,13 +233,25 @@ At-least-once event delivery guaranteed. Outbox poller is a background scheduled
 
 **Chosen:**
 Every mutating endpoint accepts `Idempotency-Key: <UUID v4>` header. Two-layer check:
-1. Redis (`idem:{key}`, TTL 24h) — fast path, in-memory
-2. Postgres `idempotency_keys` table — durable fallback
+1. Redis (`idem:{userId}:{key}`, TTL 24h) — user-scoped fast-path cache
+2. Postgres `idempotency_keys` table keyed by `(user_id, idempotency_key)` — user-scoped permanent durable record
 
-Processing flow: check Redis → check Postgres → process → write result to both → return.
+Processing flow: check Redis → check Postgres → process → commit Postgres →
+populate Redis best-effort → return. A missing, unavailable, malformed, or
+corrupt Redis value is a cache miss. PostgreSQL failure fails closed. A
+PostgreSQL hit may re-warm Redis with a fresh 24-hour TTL; Redis hits never
+extend their existing TTL.
+
+**Implementation status (verified 2026-09-03):** Task 5.3 implements this flow
+at `f9a5e3b` with `UserId` plus an opaque nonblank `String` key, PostgreSQL
+`INSERT ... ON CONFLICT DO NOTHING` followed by an authoritative read, and a
+best-effort Redis cache. Flyway creates only `idempotency_keys`; no `orders`,
+`order_id`, `order_outbox`, or expiry column was introduced. All 5 PostgreSQL
+integration tests passed in the Docker-backed rerun, and default bootstrap
+startup remains independent of PostgreSQL and Redis.
 
 **Reason:**
-Network retries are not optional — they are guaranteed. A client that times out will retry. Without idempotency, retries create duplicate orders. The dual-layer approach ensures correctness even if Redis is cold or evicted the key before the 24h TTL.
+Network retries are not optional — they are guaranteed. A client that times out will retry. Without idempotency, retries create duplicate orders. The dual-layer approach ensures correctness even if Redis is cold or evicted the key before the 24h TTL. User scoping prevents one user's key from colliding with another user's key, while permanent PostgreSQL records preserve deduplication after cache expiry.
 
 **Alternatives Considered:**
 - Redis-only idempotency key storage

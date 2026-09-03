@@ -293,18 +293,21 @@ InventoryService tests plus 16 SaleService tests (335 total).
 **Phase:** Core Services
 **Goal:** The `Order` aggregate is implemented with the Transactional Outbox pattern. A retry with the same `Idempotency-Key` returns the original response without creating a duplicate order. The outbox row is written atomically with the order row.
 
-**Verified implementation status (2026-08-28):** Week 5 Slices 1–2 / tasks
-5.1–5.2 are complete. Task 5.2 is committed at
-`df6d98ff1b9620a31a03cfdf0d0427aab922d964`. The repository contains the
+**Verified implementation status (2026-09-03):** Week 5 Slices 1–3 / tasks
+5.1–5.3 are complete. Task 5.2 is committed at
+`df6d98ff1b9620a31a03cfdf0d0427aab922d964`; Task 5.3 is committed at
+`f9a5e3b32b86c5418c9fb31ee7a31ed7ecad83e9`. The repository contains the
 framework-free in-memory `Order` aggregate, Order-owned `PurchaseIntentId`,
 required typed IDs, positive-only `Money`, an opaque nonblank string
 idempotency key, explicit `Instant` state timestamps, and manual
 `PENDING → CONFIRMED / CANCELLED / EXPIRED` transitions. The three target
 states are terminal and invalid transitions do not mutate the aggregate.
-Eleven focused OrderService tests passed. The full historical 335-test
-regression was not re-confirmed because local Docker/Testcontainers client
-initialization blocked 60 Inventory integration tests; 259 non-container
-Inventory tests and all 16 SaleService tests passed.
+Task 5.3 adds PostgreSQL-authoritative user-scoped idempotency and a best-effort
+24-hour Redis cache while preserving default no-infrastructure bootstrap.
+Thirty-seven tests were discovered: 32 initially passed and 5 PostgreSQL tests
+were initially skipped by Docker/Testcontainers API discovery. The subsequent
+Docker-backed rerun executed all 5 successfully (`5 passed, 0 failed, 0
+skipped`). The relevant Gradle build and `git diff --check` passed.
 
 ### Objectives
 
@@ -319,14 +322,63 @@ Inventory tests and all 16 SaleService tests passed.
 |---|---|---|
 | 5.1 | Spring Boot project: OrderService with virtual threads | Service — COMPLETE |
 | 5.2 | `Order` aggregate: `PlaceOrder` command, `PENDING → CONFIRMED / CANCELLED / EXPIRED` | Domain — COMPLETE |
-| 5.3 | `IdempotencyRecord` entity: Redis `idem:{userId}:{key}` check → Postgres `idempotency_keys` fallback | Domain |
+| 5.3 | `IdempotencyRecord` entity: Redis `idem:{userId}:{key}` check → Postgres `idempotency_keys` fallback | Domain — COMPLETE |
 | 5.4 | `OutboxEvent` entity: written in same `@Transactional` block as `Order` — never separately | Domain |
 | 5.5 | `POST /api/v1/orders`: `400` if no `Idempotency-Key` header, `202` on success | API |
-| 5.6 | `IdempotencyKey` value object: 24h TTL contract, `isSameRequest()`, `isExpired()` | Domain |
+| 5.6 | `IdempotencyKey` value object: canonical expiry behavior, `isSameRequest()`, `isExpired()` | Domain |
 | 5.7 | Integration test: 5 retries with same key → 1 `orders` row, 1 `order_outbox` row | Test |
 
-**Next sequential task:** 5.3 — `IdempotencyRecord` and dual-layer idempotency.
-Freeze its contract and resolve `CONFLICT-002` before implementation.
+**Next sequential task:** 5.4 — `OutboxEvent` and atomic order/outbox
+persistence. Task 5.3 is complete and Docker-verified; its frozen boundaries
+remain in force.
+
+### Task 5.3 frozen contract
+
+- Idempotency identity is `(userId, idempotencyKey)`. Redis uses
+  `idem:{userId}:{idempotencyKey}` and PostgreSQL uses the matching
+  `(user_id, idempotency_key)` durable uniqueness boundary.
+- PostgreSQL is the permanent correctness record. Redis is only a 24-hour
+  cache; a PostgreSQL hit after cache expiry may re-warm Redis with a fresh
+  24-hour TTL. Redis hits must not extend the existing TTL.
+- Task 5.3 retains the existing opaque, nonblank `String` key. The canonical
+  `IdempotencyKey` value object and canonical expiry behavior remain task 5.6.
+- The initial Task 5.3 migration creates only the `idempotency_keys` persistence
+  required by this slice. It must not create or scaffold `orders`, and it does
+  not require `order_id`; the relationship belongs to later order persistence.
+- The stored result is an opaque serialized response payload plus a validated
+  HTTP status integer. No task 5.5 response DTO is introduced.
+- Writes are PostgreSQL-first and Redis-best-effort: commit the durable record,
+  then populate Redis. Redis failure cannot invalidate or hide the committed
+  result. PostgreSQL failure fails closed and cannot continue as a new request.
+- A missing, unavailable, malformed, or corrupt Redis value is a cache miss and
+  falls back to PostgreSQL. A corrupt cached response is never returned.
+- Preserve the task 5.2 bootstrap/startup behavior. No unrelated infrastructure
+  change is authorized.
+- Task 5.3 excludes `Order` persistence, `OutboxEvent`, the orders API and DTOs,
+  the task 5.6 value object/expiry behavior, and the task 5.7 retry integration
+  proof. No task 5.4–5.7 scaffolding is permitted.
+
+### Task 5.3 verified implementation
+
+- `IdempotencyRecord` stores `UserId`, an opaque nonblank `String` key, an
+  opaque serialized response payload, and a validated HTTP status.
+- Lookup checks Redis first, falls back to permanent PostgreSQL, and may
+  re-warm Redis. Writes commit PostgreSQL first and populate Redis best-effort.
+- PostgreSQL composite uniqueness plus `INSERT ... ON CONFLICT DO NOTHING`
+  returns the permanent existing record for duplicate and concurrent writes.
+- Redis uses `idem:{userId}:{idempotencyKey}` with a fixed 24-hour TTL; cache
+  hits do not extend it.
+- Flyway creates only `idempotency_keys`; no `orders`, `order_id`,
+  `order_outbox`, or expiry column was introduced.
+- Default bootstrap starts without PostgreSQL or Redis.
+- Initial verification discovered 37 tests: 32 passed and 5 PostgreSQL tests
+  were skipped because Docker/Testcontainers API compatibility prevented
+  discovery. The Docker-backed rerun subsequently executed all 5 successfully:
+  `roundTripsOpaqueResponse()`, `duplicateReturnsPermanentExistingRecord()`,
+  `migrationCreatesOnlyPermanentIdempotencyTableShape()`,
+  `concurrentDuplicateReturnsOnePermanentRecord()`, and
+  `sameKeyIsIndependentForDifferentUsers()` (`5 passed, 0 failed, 0 skipped`).
+  The relevant Gradle build and `git diff --check` passed.
 
 ### Deliverables
 
@@ -348,7 +400,7 @@ Freeze its contract and resolve `CONFLICT-002` before implementation.
 [ ] Missing Idempotency-Key header returns 400 with structured error body
 [ ] 5 retries with same key: 1 orders row, 1 outbox row, 5 identical 202 responses
 [ ] Order + OutboxEvent write is atomic: crash test (kill -9 mid-transaction) leaves no partial state
-[ ] IdempotencyRecord written to both Redis (TTL 24h) and Postgres simultaneously
+[x] IdempotencyRecord committed to permanent Postgres first; Redis populated afterward best-effort with TTL 24h
 [ ] IdempotencyKey.isExpired() boundary test: key at 23h59m59s vs 24h00m01s
 ```
 
@@ -362,7 +414,7 @@ Freeze its contract and resolve `CONFLICT-002` before implementation.
 |---|---|---|
 | JPA `@Transactional` and Kafka publish in same method | High | This is the bug to prevent: the outbox pattern exists to solve this. Never call `KafkaTemplate.send()` inside `@Transactional` |
 | Redis idempotency key evicted before Postgres is checked | Low | `idem:` keys use fixed 24h TTL; eviction is LRU — recently-used idempotency keys are last to be evicted |
-| Concurrent requests with same key race to write | Medium | `UNIQUE (idempotency_key)` on `orders` table is the database-level guard; second writer gets a `DataIntegrityViolationException`, handled as idempotent hit |
+| Concurrent requests with the same user-scoped key race to write | Medium | `(user_id, idempotency_key)` durable uniqueness is the database-level guard; the second writer is handled as an idempotent hit |
 
 ---
 

@@ -2,7 +2,13 @@
 
 This document is the authoritative log of unresolved inconsistencies found across the repository's documentation. It is referenced by `PROJECT.md` rather than duplicated into it, per `AI-CONTEXT.md`'s rule: *"If documentation conflicts, stop and ask."*
 
-**No conflict in this document has been resolved.** Each entry states what the documents actually say, why the discrepancy matters, and what the `AI-CONTEXT.md` precedence order (`README.md` > `PRD-FlashSalePlatform.md` > `Final-Spec-Council.md` > ADRs (`01-Decisions.md`) > `DomainModel.md` > `DatabaseSchema.md` > `schema.sql`, with `RedisDesign.md` / `KafkaDesign.md` / `Build-Plan.md` unranked) *would suggest* — as a recommendation only. The actual **Decision** field for every entry is `Pending`, and only Tarun can close it.
+Each entry states what the documents actually say, why the discrepancy matters,
+and what the `AI-CONTEXT.md` precedence order (`README.md` >
+`PRD-FlashSalePlatform.md` > `Final-Spec-Council.md` > ADRs
+(`01-Decisions.md`) > `DomainModel.md` > `DatabaseSchema.md` > `schema.sql`,
+with `RedisDesign.md` / `KafkaDesign.md` / `Build-Plan.md` unranked) *would
+suggest* — as a recommendation only. Only Tarun can close a conflict;
+`CONFLICT-002` is resolved and all other entries remain open.
 
 **Categories used below:**
 - **Documentation Error** — the documents disagree in a way that looks like drift, a stale update, or a typo, rather than a deliberate design fork.
@@ -55,7 +61,7 @@ Resolution:
 
 # CONFLICT-002
 Status:
-OPEN
+RESOLVED
 Category:
 Documentation Error
 Documents:
@@ -91,13 +97,20 @@ Precedence Recommendation (per AI-CONTEXT.md ranking, not a resolution):
 Precedence cannot resolve this cleanly because the primary conflict is *within* the rank-2 document itself (FR-017 vs EC-007). Setting that internal conflict aside, every other document that touches this (RedisDesign.md, Build-Plan.md, and the PRD's own EC-007) agrees on the `userId`-scoped form, and only the older/higher-level statements (FR-017, Decision 009, Final-Spec-Council.md) retain the unscoped form — consistent with FR-017/Decision 009/Final-Spec-Council.md being the stale version that was never updated after EC-007 introduced the fix.
 
 Decision:
-Pending
+Use the user-scoped identity `(userId, idempotencyKey)`. The Redis key is
+`idem:{userId}:{idempotencyKey}`, and PostgreSQL durable uniqueness uses the
+same `(user_id, idempotency_key)` identity.
 
 Owner:
 Tarun
 
 Resolution:
-(To be filled later)
+Resolved for Week 5 / Task 5.3 on 2026-09-01. The unscoped forms in
+Final-Spec-Council.md, Decision 009, and PRD FR-017 are superseded by the
+user-scoped form already specified by PRD EC-007, RedisDesign.md, and the Build
+Plan. Decision 009 and the Task 5.3 contract now record the approved identity.
+Task 5.3 subsequently implemented and Docker-verified that user-scoped identity
+on 2026-09-03; the implementation is committed at `f9a5e3b`.
 
 ---
 
@@ -407,7 +420,7 @@ Resolution:
 | ID | Category | Documents Involved | Precedence Recommendation |
 |---|---|---|---|
 | CONFLICT-001 | Design Decision | Final-Spec-Council.md, 01-Decisions.md, RedisDesign.md, README.md | Ambiguous — rank favors README but context favors the ADR/spec |
-| CONFLICT-002 | Documentation Error | PRD-FlashSalePlatform.md (internal), Final-Spec-Council.md, 01-Decisions.md, RedisDesign.md, Build-Plan.md | Internal PRD conflict — precedence can't fully resolve |
+| CONFLICT-002 | Documentation Error — RESOLVED | PRD-FlashSalePlatform.md (internal), Final-Spec-Council.md, 01-Decisions.md, RedisDesign.md, Build-Plan.md | User-scoped `(userId, idempotencyKey)` approved for Task 5.3 |
 | CONFLICT-003 | Documentation Error | 01-Decisions.md, RedisDesign.md | 01-Decisions.md (rank 4) |
 | CONFLICT-004 | Documentation Error | README.md, Build-Plan.md | README.md (rank 1) |
 | CONFLICT-005 | Documentation Error | PRD-FlashSalePlatform.md, 01-Decisions.md, KafkaDesign.md, Build-Plan.md | PRD-FlashSalePlatform.md / 01-Decisions.md (ranks 2/4) |
@@ -419,4 +432,6 @@ Resolution:
 
 ---
 
-*Every "Decision" field above is `Pending` and every "Resolution" is unfilled. Nothing in this document has been acted upon. `PROJECT.md` should be treated as containing only what is verified and uncontested; anything listed here should be treated as open until Tarun closes it.*
+*Unresolved entries retain a `Pending` Decision and unfilled Resolution.
+`CONFLICT-002` is resolved; all other entries remain open until Tarun closes
+them.*
