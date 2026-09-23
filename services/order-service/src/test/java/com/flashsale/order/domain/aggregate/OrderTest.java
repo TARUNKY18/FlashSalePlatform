@@ -4,10 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.flashsale.order.domain.event.OrderCreated;
 import com.flashsale.order.domain.vo.Money;
 import com.flashsale.order.domain.vo.OrderId;
+import com.flashsale.order.domain.vo.OutboxEventId;
 import com.flashsale.order.domain.vo.PurchaseIntentId;
 import com.flashsale.order.domain.vo.SaleId;
 import com.flashsale.order.domain.vo.UserId;
@@ -50,7 +53,33 @@ class OrderTest {
                 () -> assertEquals(IDEMPOTENCY_KEY, order.idempotencyKey()),
                 () -> assertEquals(CREATED_AT, order.createdAt()),
                 () -> assertInstanceOf(Order.Status.Pending.class, order.status()),
-                () -> assertEquals(0L, order.version())
+                () -> assertEquals(0L, order.version()),
+                () -> assertNotNull(order.outboxEvent())
+        );
+    }
+
+    @Test
+    void placeCreatesExactlyOnePendingOrderCreatedEvent() {
+        Order order = pending();
+        OrderCreated event = order.outboxEvent().event();
+
+        assertAll(
+                () -> assertSame(order.outboxEvent(), order.outboxEvent()),
+                () -> assertEquals(4, event.eventId().version()),
+                () -> assertEquals(OrderCreated.EVENT_TYPE, event.eventType()),
+                () -> assertEquals(OrderCreated.EVENT_VERSION, event.eventVersion()),
+                () -> assertEquals(CREATED_AT, event.occurredAt()),
+                () -> assertEquals(order.id(), event.aggregateId()),
+                () -> assertEquals(OrderCreated.AGGREGATE_TYPE, event.aggregateType()),
+                () -> assertEquals(order.id(), event.payload().orderId()),
+                () -> assertEquals(PURCHASE_INTENT_ID, event.payload().purchaseIntentId()),
+                () -> assertEquals(USER_ID, event.payload().userId()),
+                () -> assertEquals(SALE_ID, event.payload().saleId()),
+                () -> assertEquals(AMOUNT, event.payload().amount()),
+                () -> assertEquals(4, order.outboxEvent().id().value().version()),
+                () -> assertEquals(false, order.outboxEvent().published()),
+                () -> assertEquals(null, order.outboxEvent().publishedAt()),
+                () -> assertEquals(CREATED_AT, order.outboxEvent().createdAt())
         );
     }
 
@@ -178,6 +207,8 @@ class OrderTest {
     void typedIdsRejectNullValues() {
         assertAll(
                 () -> assertThrows(NullPointerException.class, () -> OrderId.of((UUID) null)),
+                () -> assertThrows(NullPointerException.class,
+                        () -> new OutboxEventId(null)),
                 () -> assertThrows(NullPointerException.class,
                         () -> PurchaseIntentId.of((UUID) null)),
                 () -> assertThrows(NullPointerException.class, () -> UserId.of((UUID) null)),

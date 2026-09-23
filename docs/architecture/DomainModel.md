@@ -149,15 +149,15 @@ PENDING ──(order placed)──► CONFIRMED
 **Owning service:** OrderService
 **Owning schema:** `orders_db`
 
-**Core invariant:** Exactly one `Order` may exist per `IdempotencyKey`. No duplicate
-orders under any failure or retry scenario.
+**Core invariant:** Exactly one `Order` may exist per `(UserId, idempotencyKey)` and
+per `PurchaseIntentId`. No duplicate orders under either database identity.
 
-**Aggregate boundary:** `Order` owns `OutboxEvent` (entity) and `IdempotencyRecord`
-(entity). The outbox is part of the aggregate — publishing an event is not a side effect
-outside the boundary; it is a first-class part of order creation.
+**Aggregate boundary:** `Order` owns `OutboxEvent` (entity). The Task 5.3 durable
+`IdempotencyRecord` remains a separate domain entity and persistence flow. Creating the
+outbox event is part of order placement; publishing it is deferred infrastructure work.
 
 ```
-PENDING ──(outbox published)──► CONFIRMED
+PENDING ──(manual confirm)────► CONFIRMED
         ──(payment failed)────► CANCELLED
         ──(timeout)───────────► EXPIRED
 ```
@@ -218,12 +218,13 @@ write path is permitted.
 **Identity:** `outboxEventId: OutboxEventId`
 **Owning aggregate:** `Order`
 
-Tracks the Kafka publish state for each domain event the Order must emit.
-Written in the same DB transaction as the Order row. Polled and published by
-the outbox scheduler.
+Tracks the pending domain event the Order must persist. Written in the same DB
+transaction as the Order row. Polling and publishing are later-slice concerns.
 
-**Key fields:** `eventType: String`, `payload: JsonNode`,
-`published: boolean`, `createdAt: Instant`, `publishedAt: Instant`
+**Task 5.4 key fields:** `outboxEventId: OutboxEventId`, `event: OrderCreated`,
+`published: boolean`, `publishedAt: Instant?`. `OrderCreated` contains the canonical
+seven-field envelope and a typed six-field payload; JSON serialization belongs to
+infrastructure.
 
 ---
 

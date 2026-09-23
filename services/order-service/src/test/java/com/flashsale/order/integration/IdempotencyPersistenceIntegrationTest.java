@@ -1,7 +1,6 @@
 package com.flashsale.order.integration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.flashsale.order.application.port.IdempotencyRecordRepository;
@@ -56,9 +55,8 @@ class IdempotencyPersistenceIntegrationTest {
     }
 
     @Test
-    void migrationCreatesOnlyPermanentIdempotencyTableShape() {
+    void idempotencyTableRetainsPermanentShape() {
         assertTrue(tableExists("idempotency_keys"));
-        assertFalse(tableExists("orders"));
         List<String> columns = jdbcTemplate.queryForList(
                 """
                 SELECT column_name

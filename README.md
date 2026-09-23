@@ -442,7 +442,7 @@ unavailable — correctness is preserved at the cost of throughput.
 
 **"How do you guarantee idempotency across retries?"**
 Dual-layer: Redis cache (24h TTL, fast path) backed by Postgres `idempotency_keys`
-table (permanent). `UNIQUE (idempotency_key)` is the database-level constraint —
+table (permanent). `UNIQUE (user_id, idempotency_key)` is the database-level constraint —
 no application logic error can produce a duplicate order. Verified by a test that
 fires 5 retries and asserts exactly 1 row in the database.
 

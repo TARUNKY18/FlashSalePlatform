@@ -436,10 +436,12 @@ Engine: PostgreSQL 16 (`postgres:16.3-alpine` VERIFIED). Zero cross-database for
 
 **`inventory_db`:** `products` (global product definition, `sku` UNIQUE), `stock_levels` (Postgres source of truth for stock; `current_stock <= total_allocated`), `reservations` (partial unique index `(user_id, sale_id) WHERE status IN ('PENDING','CONFIRMED')` enforces one active reservation per user per sale; `idempotency_key` UNIQUE), `stock_reservation_log` (append-only audit), and infrastructure-owned `inventory_outbox` (V4; restrictive reservation FK, unique stable event ID, JSONB payload, publish/retry metadata).
 
-**`orders_db`:** future `orders` uses `(user_id, idempotency_key)` uniqueness
-and `reservation_id` uniqueness; future `order_outbox` uses an `event_id`
-unique Kafka dedup key and is polled every 500ms via a partial index
-`WHERE published = FALSE`. Task 5.3 introduces only `idempotency_keys`, keyed
+**`orders_db`:** the frozen Task 5.4 `orders` contract uses
+`(user_id, idempotency_key)` uniqueness and `reservation_id` uniqueness. Its
+Order-owned `order_outbox` row has a unique stable `event_id`, stores
+`occurred_at`, and starts unpublished in the same transaction as its order.
+Polling, the unpublished partial index, and retry metadata are deferred to Week
+6. Task 5.3 introduced only `idempotency_keys`, keyed
 by `(user_id, idempotency_key)`, with an opaque response payload and validated
 HTTP status. Its PostgreSQL record is permanent and initially has no
 `order_id`; Redis is a best-effort user-scoped 24-hour cache. The Flyway V1

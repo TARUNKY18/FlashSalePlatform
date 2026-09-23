@@ -394,11 +394,18 @@ Consumers must ignore unknown fields (`FAIL_ON_UNKNOWN_PROPERTIES = false`).
 
 ### order-events schemas
 
+> **Frozen OrderService Task 5.4 contract (2026-09-08):** The persisted
+> `OrderCreated` envelope contains exactly `eventId`, `eventType`, `eventVersion`,
+> `occurredAt`, `aggregateId`, `aggregateType`, and `payload`. Trace propagation
+> and Kafka publication remain deferred.
+
 **OrderCreated**
 ```json
 {
+  "eventId":       "event-uuid",
   "eventType":     "OrderCreated",
   "eventVersion":  "1.0",
+  "occurredAt":    "2026-06-15T12:01:00.000Z",
   "aggregateId":   "order-uuid",
   "aggregateType": "Order",
   "payload": {
@@ -407,9 +414,7 @@ Consumers must ignore unknown fields (`FAIL_ON_UNKNOWN_PROPERTIES = false`).
     "saleId":         "sale-uuid",
     "reservationId":  "reservation-uuid",
     "amount":         "99.99",
-    "currency":       "USD",
-    "idempotencyKey": "client-uuid",
-    "createdAt":      "2026-06-15T12:01:00.000Z"
+    "currency":       "USD"
   }
 }
 ```

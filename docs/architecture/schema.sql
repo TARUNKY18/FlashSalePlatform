@@ -408,11 +408,11 @@ CREATE INDEX idx_stock_log_reservation_id
 -- ---------------------------------------------------------------------------
 -- orders
 -- Maps to : Order aggregate root
--- Invariant: one order per idempotency_key (enforced by UNIQUE constraint)
+-- Invariant: one order per (user_id, idempotency_key) and reservation_id
 -- State    : PENDING | CONFIRMED | CANCELLED | EXPIRED
 -- ---------------------------------------------------------------------------
 CREATE TABLE orders (
-    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    id                  UUID        PRIMARY KEY,
 
     -- References (opaque — no cross-DB FKs)
     user_id             UUID        NOT NULL,
@@ -420,14 +420,14 @@ CREATE TABLE orders (
     reservation_id      UUID        NOT NULL,          -- opaque ref to inventory_db
 
     -- State machine
-    status              VARCHAR(20) NOT NULL DEFAULT 'PENDING'
+    status              VARCHAR(20) NOT NULL
                             CONSTRAINT orders_status_ck
                             CHECK (status IN ('PENDING','CONFIRMED','CANCELLED','EXPIRED')),
 
     -- Money value object
     amount              NUMERIC(12,2) NOT NULL
                             CONSTRAINT orders_amount_ck CHECK (amount > 0),
-    currency            CHAR(3)       NOT NULL DEFAULT 'USD',
+    currency            CHAR(3)       NOT NULL,
 
     -- IdempotencyKey value object — the core uniqueness guarantee
     idempotency_key     VARCHAR(255)  NOT NULL,
@@ -439,31 +439,21 @@ CREATE TABLE orders (
     cancel_reason       VARCHAR(100),                  -- PAYMENT_FAILED | SAGA_COMPENSATION | TIMEOUT
 
     -- Optimistic lock
-    version             BIGINT        NOT NULL DEFAULT 0,
+    version             BIGINT        NOT NULL,
 
-    created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    created_at          TIMESTAMPTZ   NOT NULL,
+    updated_at          TIMESTAMPTZ   NOT NULL
 );
 
--- CRITICAL: Core idempotency guarantee — the entire correctness of OrderService
--- depends on this constraint. One order per idempotency_key, forever.
-CREATE UNIQUE INDEX idx_orders_idempotency_key
-    ON orders (idempotency_key);
+-- Core idempotency guarantee is user-scoped.
+CREATE UNIQUE INDEX idx_orders_user_id_idempotency_key
+    ON orders (user_id, idempotency_key);
 
 -- CRITICAL: One order per reservation — a reservation can only be consumed once
 CREATE UNIQUE INDEX idx_orders_reservation_id
     ON orders (reservation_id);
 
--- User order history (buyer-facing API)
-CREATE INDEX idx_orders_user_id_created_at
-    ON orders (user_id, created_at DESC);
-
--- Sale-level order summary (admin dashboard, analytics reconciliation)
-CREATE INDEX idx_orders_sale_id_status
-    ON orders (sale_id, status);
-
--- Outbox poller: find orders whose outbox events are unpublished
--- (covered by order_outbox index — no additional index on orders needed)
+-- Buyer-history and sale/status indexes are deferred beyond Task 5.4.
 
 -- Constraint: confirmed_at only populated on CONFIRMED
 ALTER TABLE orders
@@ -478,43 +468,32 @@ ALTER TABLE orders
 -- Maps to : OutboxEvent entity (owned by Order aggregate)
 -- Invariant: written in same DB transaction as the parent order row
 --            published = FALSE until outbox poller processes it
--- Pattern  : Transactional Outbox — guarantees at-least-once Kafka delivery
+-- Pattern  : Transactional Outbox; publication guarantees are deferred
 -- ---------------------------------------------------------------------------
 CREATE TABLE order_outbox (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    id              UUID        PRIMARY KEY,
     order_id        UUID        NOT NULL
                         REFERENCES orders(id)
                         ON DELETE RESTRICT,
 
     -- DomainEvent envelope fields
-    event_id        UUID        NOT NULL DEFAULT gen_random_uuid(),  -- Kafka dedup key
-    event_type      VARCHAR(100) NOT NULL,                -- 'OrderCreated' | 'OrderCancelled' etc.
-    event_version   VARCHAR(10)  NOT NULL DEFAULT '1.0',
+    event_id        UUID        NOT NULL,                 -- Kafka dedup key
+    event_type      VARCHAR(100) NOT NULL,
+    event_version   VARCHAR(10)  NOT NULL,
+    occurred_at     TIMESTAMPTZ NOT NULL,
     aggregate_id    UUID        NOT NULL,
-    aggregate_type  VARCHAR(50) NOT NULL DEFAULT 'Order',
+    aggregate_type  VARCHAR(50) NOT NULL,
     payload         JSONB       NOT NULL,
 
     -- Publish state
     published       BOOLEAN     NOT NULL DEFAULT FALSE,
     published_at    TIMESTAMPTZ,
 
-    -- Retry tracking
-    attempt_count   SMALLINT    NOT NULL DEFAULT 0,
-    last_attempted_at TIMESTAMPTZ,
-    last_error      TEXT,
-
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at      TIMESTAMPTZ NOT NULL,
 
     -- Each event_id must be unique (Kafka deduplication key)
     CONSTRAINT order_outbox_event_id_unique UNIQUE (event_id)
 );
-
--- CRITICAL: Outbox poller hot path
--- "SELECT * FROM order_outbox WHERE published = FALSE ORDER BY created_at LIMIT 100"
--- Partial index on unpublished rows only — this is the most-read index in orders_db
-CREATE INDEX idx_order_outbox_unpublished
-    ON order_outbox (created_at ASC)
-    WHERE published = FALSE;
 
 -- Audit: all outbox events for a given order
 CREATE INDEX idx_order_outbox_order_id
@@ -525,43 +504,20 @@ CREATE INDEX idx_order_outbox_order_id
 
 -- ---------------------------------------------------------------------------
 -- idempotency_keys
--- Maps to : IdempotencyRecord entity (owned by Order aggregate)
+-- Maps to : Task 5.3 durable IdempotencyRecord
 -- Purpose : Durable fallback for the Redis idempotency cache (Layer 3)
 --           Redis TTL is 24h; this table is the permanent record
 -- ---------------------------------------------------------------------------
 CREATE TABLE idempotency_keys (
-    -- The key IS the identity — no surrogate PK needed
-    idempotency_key     VARCHAR(255)  PRIMARY KEY,
+    user_id             UUID          NOT NULL,
+    idempotency_key     VARCHAR(255)  NOT NULL,
+    response_payload    TEXT          NOT NULL,
+    http_status         SMALLINT      NOT NULL,
 
-    -- Stored response (serialised HTTP response)
-    response_payload    TEXT          NOT NULL,         -- JSON-serialised response body
-    http_status         SMALLINT      NOT NULL,         -- 200 | 202 | 409 | 422 etc.
-
-    -- Link back to the order created (may be NULL if order creation failed)
-    order_id            UUID
-                            REFERENCES orders(id)
-                            ON DELETE RESTRICT,
-
-    -- TTL metadata (Redis uses this to set TTL; app uses for expiry check)
-    created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-    expires_at          TIMESTAMPTZ   NOT NULL           -- DEFAULT: created_at + 24h
-                            GENERATED ALWAYS AS (created_at + INTERVAL '24 hours') STORED,
-
+    CONSTRAINT idempotency_keys_pk PRIMARY KEY (user_id, idempotency_key),
     CONSTRAINT idempotency_keys_http_status_ck
         CHECK (http_status BETWEEN 100 AND 599)
 );
-
--- Cache re-warm: look up by key (PK covers this)
-
--- Cleanup job: delete expired keys (run nightly)
-CREATE INDEX idx_idempotency_keys_expires_at
-    ON idempotency_keys (expires_at)
-    WHERE expires_at < NOW();
-
--- Reverse lookup: which idempotency key belongs to this order?
-CREATE INDEX idx_idempotency_keys_order_id
-    ON idempotency_keys (order_id)
-    WHERE order_id IS NOT NULL;
 
 
 -- =============================================================================

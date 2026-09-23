@@ -1,5 +1,7 @@
 package com.flashsale.order.domain.aggregate;
 
+import com.flashsale.order.domain.entity.OutboxEvent;
+import com.flashsale.order.domain.event.OrderCreated;
 import com.flashsale.order.domain.vo.Money;
 import com.flashsale.order.domain.vo.OrderId;
 import com.flashsale.order.domain.vo.PurchaseIntentId;
@@ -42,6 +44,7 @@ public final class Order {
     private final Money amount;
     private final String idempotencyKey;
     private final Instant createdAt;
+    private final OutboxEvent outboxEvent;
     private Status status;
     private long version;
 
@@ -65,6 +68,12 @@ public final class Order {
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
         this.status = new Status.Pending();
         this.version = 0L;
+        this.outboxEvent = OutboxEvent.pending(
+                OrderCreated.create(
+                        id, purchaseIntentId, userId, saleId, amount, createdAt
+                ),
+                createdAt
+        );
     }
 
     public static Order place(
@@ -129,4 +138,5 @@ public final class Order {
     public Instant createdAt() { return createdAt; }
     public Status status() { return status; }
     public long version() { return version; }
+    public OutboxEvent outboxEvent() { return outboxEvent; }
 }

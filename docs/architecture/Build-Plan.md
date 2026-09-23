@@ -332,6 +332,24 @@ skipped`). The relevant Gradle build and `git diff --check` passed.
 persistence. Task 5.3 is complete and Docker-verified; its frozen boundaries
 remain in force.
 
+### Task 5.4 frozen contract
+
+- `Order.place(...)` creates one Order-owned pending `OrderCreated` outbox event.
+  Domain objects contain no JPA, Jackson, Spring, or Kafka types.
+- The infrastructure `OrderRepository` maps and writes the `orders` row and its
+  single `order_outbox` row in one repository-owned transaction. Either both
+  commit or both roll back; neither identifier is regenerated during persistence.
+- Order uniqueness is `(user_id, idempotency_key)` and `reservation_id` is also
+  unique. The separate Task 5.3 durable idempotency write is not part of this
+  transaction.
+- The `OrderCreated` envelope is `eventId`, `eventType`, `eventVersion`,
+  `occurredAt`, `aggregateId`, `aggregateType`, and `payload`. Its payload is
+  exactly `orderId`, `reservationId`, `userId`, `saleId`, `amount`, and
+  `currency`.
+- The outbox row starts unpublished. Kafka publication, polling/locking,
+  scheduler behavior, retry metadata, HTTP/API work, and Task 5.6/5.7 behavior
+  remain deferred.
+
 ### Task 5.3 frozen contract
 
 - Idempotency identity is `(userId, idempotencyKey)`. Redis uses

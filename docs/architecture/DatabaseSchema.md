@@ -312,8 +312,8 @@ detection. Never read on the hot path — only by the reconciliation job and aud
 
 ### 4.1 orders
 
-Maps to the `Order` aggregate root. The `idempotency_key` UNIQUE index is the
-database-level enforcement of the platform's core correctness guarantee.
+Maps to the `Order` aggregate root. Composite `(user_id, idempotency_key)` and
+`reservation_id` uniqueness enforce the Task 5.4 database identities.
 
 | Column           | Type          | Nullable | Notes                                          |
 |------------------|---------------|----------|------------------------------------------------|
@@ -323,37 +323,33 @@ database-level enforcement of the platform's core correctness guarantee.
 | reservation_id   | UUID          | NOT NULL | Opaque ref to inventory_db, UNIQUE             |
 | status           | VARCHAR(20)   | NOT NULL | PENDING \| CONFIRMED \| CANCELLED \| EXPIRED   |
 | amount           | NUMERIC(12,2) | NOT NULL | CHECK > 0 — Money.amount                       |
-| currency         | CHAR(3)       | NOT NULL | DEFAULT 'USD' — Money.currency                 |
-| idempotency_key  | VARCHAR(255)  | NOT NULL | UNIQUE — the core correctness guarantee        |
+| currency         | CHAR(3)       | NOT NULL | Money.currency                                 |
+| idempotency_key  | VARCHAR(255)  | NOT NULL | Unique with user_id                            |
 | confirmed_at     | TIMESTAMPTZ   | NULL     | Set on → CONFIRMED                             |
 | cancelled_at     | TIMESTAMPTZ   | NULL     | Set on → CANCELLED                             |
 | expired_at       | TIMESTAMPTZ   | NULL     | Set on → EXPIRED                               |
 | cancel_reason    | VARCHAR(100)  | NULL     | PAYMENT_FAILED \| SAGA_COMPENSATION \| TIMEOUT |
 | version          | BIGINT        | NOT NULL | Optimistic lock                                |
-| created_at       | TIMESTAMPTZ   | NOT NULL |                                                |
-| updated_at       | TIMESTAMPTZ   | NOT NULL | Managed by trigger                             |
+| created_at       | TIMESTAMPTZ   | NOT NULL | Supplied by the aggregate                      |
+| updated_at       | TIMESTAMPTZ   | NOT NULL | Equal to created_at on Task 5.4 insert         |
 
 **Indexes:**
 ```sql
--- CORE GUARANTEE: one order per idempotency key
-idx_orders_idempotency_key   ON (idempotency_key) UNIQUE
+-- CORE GUARANTEE: one order per user-scoped idempotency key
+idx_orders_user_id_idempotency_key ON (user_id, idempotency_key) UNIQUE
 
 -- SAGA GUARANTEE: one order per reservation
 idx_orders_reservation_id    ON (reservation_id) UNIQUE
 
--- Buyer: order history
-idx_orders_user_id_created_at  ON (user_id, created_at DESC)
-
--- Admin/analytics: orders per sale by status
-idx_orders_sale_id_status      ON (sale_id, status)
+-- Buyer-history and sale/status indexes are deferred beyond Task 5.4.
 ```
 
 ---
 
 ### 4.2 order_outbox
 
-Maps to the `OutboxEvent` entity. The most operationally critical table in `orders_db` —
-the outbox poller runs every 500ms against `idx_order_outbox_unpublished`.
+Maps to the Order-owned `OutboxEvent` entity. Task 5.4 persists it atomically with
+the order and does not implement polling, publication, or retry behavior.
 
 | Column             | Type        | Nullable | Notes                                      |
 |--------------------|-------------|----------|--------------------------------------------|
@@ -361,43 +357,25 @@ the outbox poller runs every 500ms against `idx_order_outbox_unpublished`.
 | order_id           | UUID        | NOT NULL | FK → orders.id, ON DELETE RESTRICT         |
 | event_id           | UUID        | NOT NULL | UNIQUE — Kafka deduplication key           |
 | event_type         | VARCHAR(100)| NOT NULL | 'OrderCreated' \| 'OrderCancelled' etc.    |
-| event_version      | VARCHAR(10) | NOT NULL | DEFAULT '1.0'                              |
+| event_version      | VARCHAR(10) | NOT NULL | '1.0' supplied by the domain               |
+| occurred_at        | TIMESTAMPTZ | NOT NULL | Domain event occurrence time               |
 | aggregate_id       | UUID        | NOT NULL |                                            |
-| aggregate_type     | VARCHAR(50) | NOT NULL | DEFAULT 'Order'                            |
+| aggregate_type     | VARCHAR(50) | NOT NULL | 'Order' supplied by the domain             |
 | payload            | JSONB       | NOT NULL | Full domain event payload                  |
 | published          | BOOLEAN     | NOT NULL | DEFAULT FALSE                              |
-| published_at       | TIMESTAMPTZ | NULL     | Set by outbox poller on success            |
-| attempt_count      | SMALLINT    | NOT NULL | DEFAULT 0                                  |
-| last_attempted_at  | TIMESTAMPTZ | NULL     |                                            |
-| last_error         | TEXT        | NULL     | Last Kafka publish error message           |
-| created_at         | TIMESTAMPTZ | NOT NULL |                                            |
+| published_at       | TIMESTAMPTZ | NULL     | Initially NULL; later publisher-owned      |
+| created_at         | TIMESTAMPTZ | NOT NULL | Supplied when the event is created         |
 
 **Indexes:**
 ```sql
--- CRITICAL: Outbox poller hot path — partial index, only unpublished rows
--- This index shrinks toward zero as the poller catches up
-idx_order_outbox_unpublished  ON (created_at ASC) WHERE published = FALSE
-
 -- Audit: all events for an order
 idx_order_outbox_order_id     ON (order_id)
 
 -- Deduplication: covered by UNIQUE constraint on event_id
 ```
 
-**Outbox poller query:**
-```sql
--- Runs every 500ms, batches up to 100 rows
-SELECT id, order_id, event_id, event_type, event_version,
-       aggregate_id, payload, attempt_count
-FROM   order_outbox
-WHERE  published = FALSE
-ORDER BY created_at ASC
-LIMIT  100
-FOR UPDATE SKIP LOCKED;               -- concurrent-safe: multiple poller instances
-```
-
-`FOR UPDATE SKIP LOCKED` is mandatory — it allows multiple OrderService pods to run
-the outbox poller concurrently without blocking each other.
+The unpublished partial index, polling query, locking, and retry columns are deferred
+to Week 6.
 
 ---
 
@@ -408,21 +386,13 @@ fast path; this table is the durable fallback and permanent record.
 
 | Column            | Type         | Nullable | Notes                                      |
 |-------------------|--------------|----------|--------------------------------------------|
-| idempotency_key   | VARCHAR(255) | NOT NULL | PK — the key IS the identity               |
-| response_payload  | TEXT         | NOT NULL | JSON-serialised HTTP response body         |
+| user_id           | UUID         | NOT NULL | Composite PK                               |
+| idempotency_key   | VARCHAR(255) | NOT NULL | Composite PK with user_id                  |
+| response_payload  | TEXT         | NOT NULL | Opaque serialized response                 |
 | http_status       | SMALLINT     | NOT NULL | CHECK BETWEEN 100 AND 599                  |
-| order_id          | UUID         | NULL     | FK → orders.id (NULL if order failed)      |
-| created_at        | TIMESTAMPTZ  | NOT NULL | DEFAULT NOW()                              |
-| expires_at        | TIMESTAMPTZ  | NOT NULL | GENERATED: created_at + 24 hours           |
 
-**Indexes:**
-```sql
--- Cleanup: nightly job deletes expired keys
-idx_idempotency_keys_expires_at  ON (expires_at) WHERE expires_at < NOW()
-
--- Reverse: which key belongs to an order?
-idx_idempotency_keys_order_id    ON (order_id) WHERE order_id IS NOT NULL
-```
+Task 5.4 does not add `order_id`, expiry columns, indexes, or a foreign key to this
+completed Task 5.3 table.
 
 ---
 
@@ -468,33 +438,27 @@ inconsistency, handled by the compensation flow.
    indexes on `WHERE published = FALSE` and `WHERE status IN ('PENDING','CONFIRMED')`
    keep the working index small and fast.
 
-2. **No index on FK opaque references unless queried.** `orders.sale_id` gets an index
-   because admin queries use it. `orders.user_id` gets an index because buyers query
-   their order history. `reservations.order_id` does not get its own index — it is
-   only set on confirmation and never queried directly.
+2. **No index on opaque references unless queried.** Buyer-history and sale/status
+   order indexes remain deferred until their query slices.
 
-3. **DESC ordering on time columns for list queries.** User-facing list endpoints always
-   want most-recent-first. `idx_orders_user_id_created_at ON (user_id, created_at DESC)`
-   supports this with a single index scan.
+3. **DESC ordering on time columns for list queries.** Add such indexes with the
+   user-facing query slice, not speculatively in Task 5.4.
 
 4. **UNIQUE constraints as indexes.** Postgres creates a B-tree index for every UNIQUE
-   constraint automatically. `idempotency_key` uniqueness is enforced by a UNIQUE index,
-   not a separate constraint — same effect, one fewer object.
+   constraint automatically. Task 5.4 uses unique indexes for `(user_id,
+   idempotency_key)` and `reservation_id`.
 
-5. **Covering the outbox poller.** The outbox poller's query
-   (`WHERE published = FALSE ORDER BY created_at ASC LIMIT 100 FOR UPDATE SKIP LOCKED`)
-   needs only `id`, `created_at`, and `published` from the index. The partial index
-   `idx_order_outbox_unpublished` covers this without a heap fetch for the WHERE clause.
+5. **Outbox polling is deferred.** Week 6 may add its required partial index together
+   with the poller; Task 5.4 adds no polling index.
 
 ### Index catalogue by criticality
 
 | Index | Table | Type | Why Critical |
 |---|---|---|---|
-| `idx_orders_idempotency_key` | orders | UNIQUE | Core correctness guarantee |
+| `idx_orders_user_id_idempotency_key` | orders | UNIQUE | User-scoped order idempotency |
 | `idx_orders_reservation_id` | orders | UNIQUE | Prevents double-order per reservation |
 | `idx_reservations_user_sale_active` | reservations | PARTIAL UNIQUE | Prevents double-reservation per user |
 | `idx_reservations_idempotency_key` | reservations | UNIQUE | Prevents duplicate reservation on retry |
-| `idx_order_outbox_unpublished` | order_outbox | PARTIAL | Outbox poller hot path, 500ms interval |
 | `idx_reservations_expiry_pending` | reservations | PARTIAL | TTL sweep scheduler |
 | `idx_flash_sales_status_scheduled_at` | flash_sales | PARTIAL | Sale activation scheduler |
 
@@ -531,7 +495,7 @@ inconsistency, handled by the compensation flow.
 | `stock_levels` | `stock_levels_product_sale_unique` | product_id, sale_id | One stock level per product per sale |
 | `reservations` | `idx_reservations_user_sale_active` | user_id, sale_id (PARTIAL) | One active reservation per user per sale |
 | `reservations` | `idx_reservations_idempotency_key` | idempotency_key | Idempotent reservation creation |
-| `orders` | `idx_orders_idempotency_key` | idempotency_key | Core order idempotency |
+| `orders` | `idx_orders_user_id_idempotency_key` | user_id, idempotency_key | User-scoped order idempotency |
 | `orders` | `idx_orders_reservation_id` | reservation_id | One order per reservation |
 | `order_outbox` | `order_outbox_event_id_unique` | event_id | Kafka deduplication |
 
@@ -685,9 +649,9 @@ GROUP  BY sl.id, sl.sale_id, sl.product_id, sl.current_stock,
 ```sql
 -- Step 1: Redis check (application layer, not SQL)
 -- Step 2: Postgres fallback on Redis miss
-SELECT idempotency_key, response_payload, http_status, order_id
+SELECT user_id, idempotency_key, response_payload, http_status
 FROM   idempotency_keys
-WHERE  idempotency_key = $1;  -- PK scan, < 1ms
+WHERE  user_id = $1 AND idempotency_key = $2;
 ```
 
 **QP-011 — Place order (transactional — order + outbox in one transaction)**
@@ -699,23 +663,16 @@ BEGIN;
         amount, currency, idempotency_key, version, created_at, updated_at
     ) VALUES (
         $1, $2, $3, $4, 'PENDING',
-        $5, $6, $7, 0, NOW(), NOW()
+        $5, $6, $7, 0, $8, $8
     );
 
     -- Write the outbox event in the same transaction
     INSERT INTO order_outbox (
-        id, order_id, event_id, event_type, event_version,
+        id, order_id, event_id, event_type, event_version, occurred_at,
         aggregate_id, aggregate_type, payload, published, created_at
     ) VALUES (
-        gen_random_uuid(), $1, gen_random_uuid(), 'OrderCreated', '1.0',
-        $1, 'Order', $8::jsonb, FALSE, NOW()
-    );
-
-    -- Write the idempotency record
-    INSERT INTO idempotency_keys (
-        idempotency_key, response_payload, http_status, order_id, created_at
-    ) VALUES (
-        $7, $9, 202, $1, NOW()
+        $9, $1, $10, 'OrderCreated', '1.0', $11,
+        $1, 'Order', $12::jsonb, FALSE, $11
     );
 COMMIT;
 -- If any statement fails, the entire transaction rolls back.
@@ -723,7 +680,10 @@ COMMIT;
 -- written without the outbox event. Atomicity is guaranteed by Postgres.
 ```
 
-**QP-012 — Outbox poller: fetch and publish batch**
+**QP-012 — Week 6 planned outbox poller: fetch and publish batch**
+
+This future query requires a later migration for its polling index and retry columns;
+it is not part of the Task 5.4 schema.
 ```sql
 -- Runs every 500ms, processes up to 100 rows
 SELECT id, order_id, event_id, event_type, event_version,
@@ -735,7 +695,7 @@ LIMIT  100
 FOR UPDATE SKIP LOCKED;        -- concurrent-safe across multiple OrderService pods
 ```
 
-**QP-013 — Outbox poller: mark as published**
+**QP-013 — Week 6 planned outbox poller: mark as published**
 ```sql
 UPDATE order_outbox
 SET    published        = TRUE,
