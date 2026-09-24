@@ -2,9 +2,9 @@
 ## Flash Sale Platform — Single Source of Truth
 **Version:** 3 (replaces Version 2, 2026-06-17)
 
-> **Implementation status warning (updated 2026-09-03):** Broad historical
+> **Implementation status warning (updated 2026-09-23):** Broad historical
 > implementation-status fields in this document remain stale. The verified
-> Slice 6 and Week 5 Slices 1–3 facts below have been reconciled; for complete current implementation
+> Slice 6 and Week 5 Slices 1–4 facts below have been reconciled; for complete current implementation
 > truth, see `HANDOFF.md` and `context/CURRENT_STATE.md`. The architecture, ADR,
 > and design sections remain authoritative. Do not copy any unreconciled
 > "PLANNED — no code" field into implementation decisions.
@@ -105,8 +105,8 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 | 005 | Concurrency Model — Java 21 Virtual Threads (= ADR-002) | Approved | PLANNED — no Java code exists |
 | 006 | Inter-Service Communication — Kafka async / HTTP sync (= ADR-003) | Approved | PARTIAL — InventoryService produces `StockReserved` and `ReservationExpired`; no consumers exist |
 | 007 | Kafka Topic Design and Partition Strategy (= ADR-013) | Approved | PARTIAL — InventoryService owns creation of `inventory-events`; other topics remain planned |
-| 008 | Event Reliability — Transactional Outbox (= ADR-004) | Approved | PARTIAL — InventoryService has an infrastructure-owned `inventory_outbox`; OrderService outbox remains planned |
-| 009 | Order Idempotency — Dual-Layer Key Check | Approved | PLANNED — no code |
+| 008 | Event Reliability — Transactional Outbox (= ADR-004) | Approved | PARTIAL — InventoryService publishes its outbox; OrderService atomically persists `order_outbox`, with publication deferred to Week 6 |
+| 009 | Order Idempotency — Dual-Layer Key Check | Approved | PARTIAL — PostgreSQL authority and best-effort Redis cache are implemented; HTTP integration remains task 5.5 |
 | 010 | Saga Pattern — Choreography over Orchestration (= ADR-012) | Approved | PLANNED — no saga consumers exist |
 | 011 | Redis Architecture — Three-Layer Contract | Approved | PLANNED — no code |
 | 012 | Analytics Storage — ClickHouse over PostgreSQL (= ADR-011) | Approved | VERIFIED — ClickHouse container running and healthy |
@@ -123,7 +123,7 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 |---|---|---|---|
 | Language / runtime | Java 21 | Virtual Threads, sealed interfaces, records | VERIFIED — SaleService, InventoryService, and OrderService inherit Java 21; virtual threads are enabled |
 | Web framework | Spring Boot 3.3.4 | `spring.threads.virtual.enabled=true` | VERIFIED — Spring Boot 3.3.4; SaleService (8081), InventoryService (8082), and OrderService (8083) |
-| Build tool | Gradle 8.10 wrapper | multi-module Groovy DSL | VERIFIED — `settings.gradle` includes `sale-service`, `inventory-service`, and `order-service`; the relevant Task 5.3 OrderService build succeeded |
+| Build tool | Gradle 8.10 wrapper | multi-module Groovy DSL | VERIFIED — `settings.gradle` includes `sale-service`, `inventory-service`, and `order-service`; the relevant Task 5.4 OrderService build succeeded |
 | Messaging | Apache Kafka 3.7.0, KRaft mode | `AUTO_CREATE_TOPICS_ENABLE=false`, `enable.auto.commit=false`, `acks=all` | VERIFIED — `apache/kafka:3.7.0` running; `make health` returned `✓ Kafka broker reachable` confirmed 2026-06-17 |
 | Cache / in-memory | Redis Cluster, 3 primary shards / 1 replica each | AOF `everysec`, `allkeys-lru` | VERIFIED — `redis:7.2.5-alpine`, 6 nodes healthy, `cluster_state:ok` confirmed 2026-06-17 |
 | Relational DB | PostgreSQL 16 | 3 fully isolated instances | VERIFIED running (`postgres:16.3-alpine`, all 3 `pg_isready`) |
@@ -134,13 +134,14 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 | Observability | Micrometer, Prometheus, OpenTelemetry, Tempo | `/actuator/prometheus`, 100%/10% trace sampling | PLANNED — no metrics or tracing code written |
 | Load testing | Gatling or k6 | 50,000 concurrent user simulation | PLANNED — no simulation files written |
 | Property-based testing | jqwik 1.9.0 | Applied to Product stock domain model | VERIFIED — 5 properties × 1,000 generated examples in InventoryService; test-only classpath |
-| Integration testing | Testcontainers | Real Postgres/Redis/Kafka in tests | VERIFIED — InventoryService uses PostgreSQL 16.3, Redis 7.2, and a Kafka 3.7-compatible broker; Slice 5 includes real same-endpoint Kafka outage/recovery coverage, test-only Slice 6 proves the 1500-request/1000-unit reservation invariant through MockMvc, and all 5 Task 5.3 OrderService PostgreSQL tests passed in a Docker-backed rerun |
-| Migrations | Flyway | — | VERIFIED — V1 in SaleService (`flash_sales`, `sale_schedules`, `sale_status_history`); InventoryService V1 (`products`, `stock_levels`), V2 (`reservations`, `stock_reservation_log`), V3 (`idempotency_key NOT NULL`), V4 (`inventory_outbox`); OrderService V1 (`idempotency_keys` only) |
+| Integration testing | Testcontainers | Real Postgres/Redis/Kafka in tests | VERIFIED — InventoryService uses PostgreSQL 16.3, Redis 7.2, and a Kafka 3.7-compatible broker; Slice 5 includes real same-endpoint Kafka outage/recovery coverage, test-only Slice 6 proves the 1500-request/1000-unit reservation invariant through MockMvc, and all 10 Task 5.3/5.4 OrderService PostgreSQL tests passed in a Docker-backed run |
+| Migrations | Flyway | — | VERIFIED — V1 in SaleService (`flash_sales`, `sale_schedules`, `sale_status_history`); InventoryService V1 (`products`, `stock_levels`), V2 (`reservations`, `stock_reservation_log`), V3 (`idempotency_key NOT NULL`), V4 (`inventory_outbox`); OrderService V1 (`idempotency_keys`) and V2 (`orders`, `order_outbox`) |
 
 **Package structure:** `com.flashsale.sale`, `com.flashsale.inventory`, and
 `com.flashsale.order` exist. OrderService currently has its bootstrap, Order
 domain, Task 5.3 idempotency application ports/service, and PostgreSQL/Redis
-adapters; its API and later-slice infrastructure remain planned.
+adapters, plus Task 5.4 Order/outbox persistence; its API and later-slice
+messaging infrastructure remain planned.
 NotificationService and AnalyticsService packages remain planned.
 
 ---
@@ -148,14 +149,14 @@ NotificationService and AnalyticsService packages remain planned.
 ## Services
 
 **Status:** SaleService and InventoryService are complete through their current
-milestones. OrderService is complete through Week 5 Slice 3. NotificationService
+milestones. OrderService is complete through Week 5 Slice 4. NotificationService
 and AnalyticsService remain planned.
 
 | Service | Owns | DB / Schema | Kafka Role | Redis Role | Port | Code Status |
 |---|---|---|---|---|---|---|
 | SaleService | Sale lifecycle, scheduling, status machine | `sales_db` | Producer: `sale-events` | Cache: active sale metadata | 8081 | COMPLETE — Week 2; FlashSale aggregate, REST API, Flyway V1, 16 tests |
 | InventoryService | Stock levels, atomic decrement, pre-warm, reservations | `inventory_db` | Producer: `inventory-events` | Layer 1: stock counter (Lua DECR), pre-warm | 8082 | COMPLETE through Week 4 — Slices 1–6 complete; 70 production Java files, 319 tests, latest implementation commit `8a60df7` |
-| OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PARTIAL — Slices 1–3 complete; bootstrap, framework-free Order domain, and PostgreSQL-authoritative idempotency with a best-effort Redis cache; no orders API, order persistence, outbox, or messaging yet |
+| OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PARTIAL — Slices 1–4 complete; bootstrap, Order domain, PostgreSQL-authoritative idempotency, and atomic Order/outbox persistence; no orders API or messaging yet |
 | NotificationService | Email, push, SMS fan-out | None (stateless) | Consumer: all three topics | None | 8084 | PLANNED — zero code written |
 | AnalyticsService | Event ingestion, metrics, dashboards | ClickHouse | Consumer: all three topics | None | 8085 | PLANNED — zero code written |
 
@@ -181,9 +182,9 @@ implemented and verified, including persistence, REST creation, expiry, and
 application events backed by an infrastructure-owned outbox. Test-only Slice 6
 verifies the 1500-request/1000-unit concurrency invariant without changing that
 behavior. The Inventory domain model has no outbox state. The in-memory Order
-aggregate and idempotency infrastructure are implemented through Week 5 Slice
-3; order persistence, outbox, API, and later integration behavior remain
-planned.**
+aggregate, idempotency infrastructure, and atomic Order/outbox persistence are
+implemented through Week 5 Slice 4; the API and later integration behavior
+remain planned.**
 
 **Aggregate roots (4):**
 | Aggregate | Owning service / schema | Core invariant | State machine |
@@ -210,6 +211,14 @@ fallback and best-effort Redis re-warming. Writes commit PostgreSQL first using
 duplicate, and populate Redis best-effort afterward. Redis keys are
 `idem:{userId}:{idempotencyKey}` with a fixed 24-hour TTL that cache hits do not
 extend. Default bootstrap startup does not require PostgreSQL or Redis.
+
+**Implemented persistence scope (Week 5 Slice 4):** `Order.place(...)` creates
+exactly one Order-owned initial `OrderCreated` event. The infrastructure
+repository maps and persists the Order and its outbox row in one PostgreSQL
+transaction, preserving the domain-generated Order, event, and outbox IDs.
+`PurchaseIntentId` translates to `reservation_id` / `reservationId` only at
+the persistence/event boundary. The outbox starts unpublished; Kafka,
+publication, polling/locking, retry behavior, and HTTP work remain deferred.
 
 **Entities:**
 | Entity | Inside aggregate | Identity | Note |
@@ -426,7 +435,7 @@ timeout, and 120 s delivery timeout. Consumer configuration remains planned.
 |---|---|---|---|
 | `sales_db` | SaleService | 5432 | VERIFIED running — no application tables |
 | `inventory_db` | InventoryService | 5433 | VERIFIED running — no application tables |
-| `orders_db` | OrderService | 5434 | VERIFIED running — no application tables |
+| `orders_db` | OrderService | 5434 | VERIFIED — V1 `idempotency_keys`; V2 `orders` and `order_outbox` validated with PostgreSQL/Testcontainers |
 
 Engine: PostgreSQL 16 (`postgres:16.3-alpine` VERIFIED). Zero cross-database foreign keys by design — cross-service references are opaque UUIDs.
 
@@ -436,7 +445,7 @@ Engine: PostgreSQL 16 (`postgres:16.3-alpine` VERIFIED). Zero cross-database for
 
 **`inventory_db`:** `products` (global product definition, `sku` UNIQUE), `stock_levels` (Postgres source of truth for stock; `current_stock <= total_allocated`), `reservations` (partial unique index `(user_id, sale_id) WHERE status IN ('PENDING','CONFIRMED')` enforces one active reservation per user per sale; `idempotency_key` UNIQUE), `stock_reservation_log` (append-only audit), and infrastructure-owned `inventory_outbox` (V4; restrictive reservation FK, unique stable event ID, JSONB payload, publish/retry metadata).
 
-**`orders_db`:** the frozen Task 5.4 `orders` contract uses
+**`orders_db`:** the implemented Task 5.4 `orders` schema uses
 `(user_id, idempotency_key)` uniqueness and `reservation_id` uniqueness. Its
 Order-owned `order_outbox` row has a unique stable `event_id`, stores
 `occurred_at`, and starts unpublished in the same transaction as its order.
@@ -444,9 +453,9 @@ Polling, the unpublished partial index, and retry metadata are deferred to Week
 6. Task 5.3 introduced only `idempotency_keys`, keyed
 by `(user_id, idempotency_key)`, with an opaque response payload and validated
 HTTP status. Its PostgreSQL record is permanent and initially has no
-`order_id`; Redis is a best-effort user-scoped 24-hour cache. The Flyway V1
-migration and this exact table shape were verified against PostgreSQL 16.3 via
-Testcontainers.
+`order_id`; Redis is a best-effort user-scoped 24-hour cache. Flyway V1 and V2,
+including atomic commit and rollback behavior, were verified against PostgreSQL
+16.3 via Testcontainers.
 
 **Key query patterns:** the VERIFIED Inventory outbox poller selects at most 100
 unpublished rows ordered by `created_at` using `FOR UPDATE SKIP LOCKED`, retaining
@@ -454,9 +463,9 @@ the row locks through the Kafka batch attempt. The planned OrderService outbox
 uses the same concurrency pattern. Stock fallback and expiry query descriptions
 remain as documented for their respective slices.
 
-**Task 5.3 schema verification:** `idempotency_keys` was created successfully in
-the Docker-backed PostgreSQL test database; `orders` and `order_outbox` were not
-introduced.
+**Task 5.4 schema verification:** `idempotency_keys`, `orders`, and
+`order_outbox` were validated in Docker-backed PostgreSQL. All 10 Task 5.3/5.4
+PostgreSQL/Testcontainers tests passed with no failures or skips.
 
 ---
 
@@ -517,20 +526,19 @@ Week 1 (infrastructure foundation) is partially verified: Postgres, ClickHouse, 
 | 9 | Observability | AnalyticsService batch-writes to ClickHouse; Prometheus metrics; traceId propagation |
 | 10 | Production Readiness | Helm charts + HPA; Gatling load test at 50k users |
 
-**Current status:** Week 5 is in progress. Build Plan tasks 5.1–5.3 are complete;
+**Current status:** Week 5 is in progress. Build Plan tasks 5.1–5.4 are complete;
 task 5.2 is committed at `df6d98ff1b9620a31a03cfdf0d0427aab922d964`,
 and Task 5.3 is committed at
-`f9a5e3b32b86c5418c9fb31ee7a31ed7ecad83e9`.
+`f9a5e3b32b86c5418c9fb31ee7a31ed7ecad83e9`; Task 5.4 is committed at
+`cb2081f`.
 
-Task 5.3 verification discovered 37 tests: 32 initially passed and 5 PostgreSQL
-tests were initially skipped because Docker/Testcontainers API compatibility
-prevented discovery. A Docker-backed rerun then executed all 5 PostgreSQL tests
-successfully (`5 passed, 0 failed, 0 skipped`). The relevant Gradle build and
-`git diff --check` also passed.
+Task 5.4 verification passed 35 non-container OrderService tests and all 10
+Task 5.3/5.4 PostgreSQL/Testcontainers tests (`10 passed, 0 failed, 0 skipped`).
+The relevant Gradle build and `git diff --check` also passed.
 
-**Immediate next task:** Week 5 / Build Plan task 5.4 — implement the
-`OutboxEvent`/atomic order-outbox persistence slice without expanding completed
-Task 5.3.
+**Immediate next task:** Week 5 / Build Plan task 5.5 — implement
+`POST /api/v1/orders` without pulling in Task 5.6, Task 5.7, or Week 6 Kafka
+publication/consumption behavior.
 
 ---
 

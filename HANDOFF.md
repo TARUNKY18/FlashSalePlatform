@@ -1,8 +1,8 @@
 # Flash Sale Platform — Engineering Handoff
 
-**Handoff date:** 2026-08-28
+**Handoff date:** 2026-09-23
 
-**Current milestone:** Week 5 — OrderService (complete through Slice 2 / Build Plan task 5.2)
+**Current milestone:** Week 5 — OrderService (complete through Slice 4 / Build Plan task 5.4)
 
 **Week 3 status:** COMPLETE — all implementation slices committed; documentation reconciled
 
@@ -22,25 +22,30 @@
 
 **Week 5, Slice 2 status:** COMPLETE — Build Plan task 5.2; framework-free in-memory `Order` aggregate, Order-owned `PurchaseIntentId`, required typed IDs, positive-only `Money`, opaque string idempotency key, explicit `Instant` timestamps, and terminal state machine; 11 focused tests; committed `df6d98f`; documented in SESSION-018
 
+**Week 5, Slice 3 status:** COMPLETE — Build Plan task 5.3; PostgreSQL-authoritative user-scoped idempotency, best-effort 24-hour Redis cache, and preserved no-infrastructure bootstrap; committed `f9a5e3b`
+
+**Week 5, Slice 4 status:** COMPLETE — Build Plan task 5.4; Order-owned `OrderCreated`, atomic Order + Outbox persistence, frozen V2 schema, and 10/10 passing Task 5.3/5.4 PostgreSQL/Testcontainers tests; committed `cb2081f`
+
 **Branch:** `main`
 
-**Latest commit:** `86a9c5cbef10fe5e73abab97a9b69413280f3187` (`docs: update task 5.2 documentation`); local `main` and `origin/main` both resolve to this commit
+**Latest commit:** `cb2081fee5bd6fb14dab98a947df8554052f3dfd` (`feat(order): implement Task 5.4 order persistence and outbox`); local `main` and `origin/main` both resolved to this commit at verification
 
-**Working tree at reconciliation start:** clean; all eight Week 5 Slice 2 implementation paths are committed in `df6d98f`.
+**Working tree at reconciliation start:** clean; Task 5.4 is committed and pushed.
 
-**Audience:** The senior engineer or Codex session preparing Week 5 / Build Plan task 5.3
+**Audience:** The senior engineer or Codex session preparing Week 5 / Build Plan task 5.5
 
 Week 3 and Week 4 are complete. Week 4 Slices 1–6 remain complete and verified.
-Week 5 Slices 1–2 are complete. This handoff reflects the committed Order
-domain state before task 5.3. The focused Task 5.2 checks passed; the full
-335-test regression was blocked by local Docker/Testcontainers initialization.
+Week 5 Slices 1–4 are complete. This handoff reflects the committed Order
+domain, idempotency, persistence, and transactional-outbox state before task
+5.5. Thirty-five non-container OrderService tests and all 10 Task 5.3/5.4
+PostgreSQL/Testcontainers tests passed.
 
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
 ADR-020 (Pre-Warm Architecture) is now approved at Revision 2 following
 independent architecture review of six findings, all resolved.
 
-> **Documentation drift warning:** Week 5 Slice 2 facts are reconciled across
+> **Documentation drift warning:** Week 5 Slice 4 facts are reconciled across
 > the canonical state documents, but broad historical status fields may still
 > lag current source. Repository source and Git remain implementation authority;
 > do not copy stale planned fields or structures into code.
@@ -226,6 +231,8 @@ these approved implementation commits:
 | `8a60df7` | 1500-request/1000-unit reservation concurrency integration test (Week 4, Slice 6 / task 4.7) |
 | `567450e` | OrderService Spring Boot bootstrap (Week 5, Slice 1 / task 5.1) |
 | `df6d98f` | Order aggregate and state machine (Week 5, Slice 2 / task 5.2) |
+| `f9a5e3b` | PostgreSQL-authoritative dual-layer idempotency (Week 5, Slice 3 / task 5.3) |
+| `cb2081f` | Atomic Order + Outbox persistence (Week 5, Slice 4 / task 5.4) |
 
 InventoryService currently contains:
 
@@ -1547,14 +1554,19 @@ Week 3 tasks and were not introduced.
 - Manual `confirm(Instant)`, `cancel(String, Instant)`, and `expire(Instant)`
   transition only `PENDING` to terminal `CONFIRMED`, `CANCELLED`, or `EXPIRED`;
   invalid transitions fail without mutation.
-- Task 5.2 added one test-only standard starter and 11 focused domain tests.
-- No API/controller, DTO, repository, persistence, JPA, Flyway, PostgreSQL
-  access, Redis, Kafka, idempotency uniqueness/cache/TTL behavior, outbox,
-  scheduler, cross-service behavior, or task 5.3–5.7 scaffolding was added.
-- Verification: 11 OrderService tests, 16 SaleService tests, and 259 Inventory
-  non-container tests passed. The full historical 335-test regression was not
-  re-confirmed because Docker client initialization blocked 60 existing
-  Inventory Testcontainers tests.
+- Task 5.3 implements PostgreSQL-authoritative `(user_id, idempotency_key)`
+  durable idempotency with a best-effort 24-hour Redis cache.
+- `Order.place(...)` creates exactly one Order-owned initial `OrderCreated`
+  event. The infrastructure repository persists Order + Outbox atomically,
+  preserving generated IDs; the outbox begins unpublished.
+- `PurchaseIntentId` remains the domain term and translates to
+  `reservation_id` / `reservationId` only at persistence/event boundaries.
+- The Task 5.3 durable idempotency write is not part of the Task 5.4 Order +
+  Outbox transaction.
+- No orders API/controller/DTO, Kafka interaction, publisher, scheduler,
+  polling/locking, publish retry, or saga consumer is implemented.
+- Verification: 35 non-container OrderService tests and all 10 Task 5.3/5.4
+  PostgreSQL/Testcontainers tests passed; no tests failed or were skipped.
 
 ---
 
@@ -1582,10 +1594,13 @@ No Week 4 implementation slices remain.
 |---|---|---|
 | Slice 1: OrderService Spring Boot bootstrap (task 5.1) | ✔ DONE | `567450e`; SESSION-017 |
 | Slice 2: Order aggregate and state machine (task 5.2) | ✔ DONE | `df6d98f`; SESSION-018 |
+| Slice 3: PostgreSQL-authoritative dual-layer idempotency (task 5.3) | ✔ DONE | `f9a5e3b` |
+| Slice 4: Atomic Order + Outbox persistence (task 5.4) | ✔ DONE | `cb2081f` |
 
-**Next sequential task:** Week 5 / Build Plan task 5.3 — `IdempotencyRecord`
-and dual-layer idempotency. Freeze the task contract and resolve
-`CONFLICT-002` before implementation.
+**Next sequential task:** Week 5 / Build Plan task 5.5 —
+`POST /api/v1/orders`. Task 5.6 idempotency-key value-object behavior, Task 5.7
+retry acceptance behavior, and Week 6 Kafka publication/consumption remain out
+of scope.
 
 ---
 

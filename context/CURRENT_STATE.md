@@ -1,7 +1,7 @@
 # CURRENT_STATE.md
-**Milestone:** Week 5 — OrderService (complete through Slice 2 / Build Plan task 5.2)
+**Milestone:** Week 5 — OrderService (complete through Slice 4 / Build Plan task 5.4)
 **Status:** 🟢 COMPLETE
-**Date:** 2026-08-28
+**Date:** 2026-09-23
 **Engineer:** Tarun K Y
 
 ---
@@ -11,14 +11,13 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `86a9c5cbef10fe5e73abab97a9b69413280f3187` — `docs: update task 5.2 documentation` |
-| Implementation commit status | Week 5 Slice 2 implementation is committed at `df6d98ff1b9620a31a03cfdf0d0427aab922d964`; local `main` and `origin/main` both resolve to `86a9c5cbef10fe5e73abab97a9b69413280f3187` |
-| Build | Focused OrderService tests passed; whole-project regression was blocked by local Docker/Testcontainers client initialization |
-| Production Java files | 107 total: InventoryService 70, SaleService 30, OrderService 7 |
-| Test classes | 44 total; Week 5 Slice 2 added `OrderTest` |
-| OrderService tests | 11 passed, 0 failed, 0 errors, 0 skipped |
-| Inventory verification | 259 non-container tests passed; 60 Testcontainers tests could not initialize Docker, so the full 319-test baseline was not re-confirmed |
-| SaleService regression | 16 passed, 0 failed, 0 errors, 0 skipped |
+| Latest commit | `cb2081f` — `feat(order): implement Task 5.4 order persistence and outbox` |
+| Implementation commit status | Week 5 Slice 4 / task 5.4 is committed and pushed; local `main` and `origin/main` resolved to `cb2081f` at verification |
+| Build | 35 OrderService non-container tests passed; all 10 Task 5.3/5.4 PostgreSQL/Testcontainers tests passed with Docker |
+| Production Java files | 127 total: InventoryService 70, SaleService 30, OrderService 27 |
+| Test classes | 52 total; OrderService has 9 test classes |
+| OrderService tests | 45 passed, 0 failed, 0 skipped (35 non-container + 10 PostgreSQL/Testcontainers) |
+| Inventory / SaleService regression | No production or test files in either service changed for Task 5.4; their prior verified baselines remain unchanged |
 
 ---
 
@@ -48,22 +47,24 @@
 | ✔ Reservation Concurrency Integration Test (SESSION-016, committed `8a60df7`) | Test-only `ReservationConcurrencyIntegrationTest`; 1500 concurrent MockMvc POST requests for one 1000-unit product/sale, with unique users and idempotency keys and quantity 1; exactly 1000 `201` and 500 `409 SOLD_OUT`; durable PostgreSQL stock 0/revision 1000/Product revision 0; 1000 distinct PENDING reservations and linked `StockReserved` outbox rows; Redis stock 0/version 1000; all 28 frozen contract requirements passed; no production behavior changed |
 | ✔ OrderService Spring Boot Bootstrap (SESSION-017, committed `567450e`) | Week 5 Slice 1 / task 5.1; minimal Spring Boot 3.3.4 Web/Actuator module; inherited Java 21; virtual threads; `order-service` application name; port 8083 with `ORDER_SERVICE_PORT` override; no domain, API, persistence, messaging, or tests |
 | ✔ Order Aggregate (SESSION-018, committed `df6d98f`) | Week 5 Slice 2 / task 5.2; framework-free in-memory `Order`; `place(...)` creates version-0 `PENDING`; Order-owned `PurchaseIntentId`; typed `OrderId`/`UserId`/`SaleId`; positive-only `Money`; opaque nonblank string idempotency key; explicit `Instant` creation/transition times; manual `confirm`/`cancel`/`expire`; terminal-state enforcement; 11 focused tests |
+| ✔ Order Idempotency (committed `f9a5e3b`) | Week 5 Slice 3 / task 5.3; PostgreSQL-authoritative `(user_id, idempotency_key)` durable record; best-effort 24-hour Redis cache and re-warming; default no-infrastructure bootstrap preserved; 5 PostgreSQL/Testcontainers tests passed |
+| ✔ Order Persistence + Transactional Outbox (committed `cb2081f`) | Week 5 Slice 4 / task 5.4; `Order.place(...)` creates one Order-owned `OrderCreated` event; `orders` and `order_outbox` persist atomically; stable IDs, canonical envelope/payload, restrictive FK, composite order uniqueness, unique reservation, unpublished initial outbox state; 10 PostgreSQL/Testcontainers tests passed across tasks 5.3/5.4 |
 
 ---
 
 ## Verification
 
 ```text
-OrderService: 11 passed, 0 failed, 0 errors, 0 skipped
-SaleService:   16 passed, 0 failed, 0 errors, 0 skipped
-Inventory non-container suites: 259 passed, 0 failed, 0 errors, 0 skipped
-Whole-project clean build: BLOCKED — Docker/Testcontainers client initialization
+OrderService non-container:              35 passed, 0 failed, 0 skipped
+OrderService PostgreSQL/Testcontainers:  10 passed, 0 failed, 0 skipped
+Task 5.4 final verification:              PASS
 ```
 
-The full historical baseline remains 319 Inventory tests plus 16 SaleService
-tests (335 total), but it was not re-confirmed for Slice 2. Both full-build
-attempts reached the Inventory suite and reported 60 container-dependent
-failures caused by Docker client initialization; no Task 5.2 assertion failed.
+Docker/Testcontainers successfully started and executed all 10 PostgreSQL
+integration tests; none were skipped for Docker availability. With the local
+Docker Engine 29 environment, Testcontainers 1.19.8 required the transient
+test-process option `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`; repository
+configuration was not changed.
 
 OrderService smoke verification passed: it starts without external
 infrastructure, binds to port 8083 by default, honors `ORDER_SERVICE_PORT`,
@@ -86,6 +87,13 @@ from its production runtime classpath.
 V4 adds infrastructure-owned `inventory_outbox`, with a restrictive FK to
 `reservations`, unique stable `event_id`, JSONB payload, publish state, and retry
 metadata. No release, reconciliation, or additional Kafka table exists.
+
+`orders_db` contains Task 5.3 `idempotency_keys` from V1 and Task 5.4 `orders`
+plus `order_outbox` from V2. `orders` enforces uniqueness on
+`(user_id, idempotency_key)` and `reservation_id`; `currency` remains
+`CHAR(3)`. `order_outbox` has a restrictive FK to `orders`, unique stable
+`event_id`, canonical event metadata and JSONB payload, and starts unpublished.
+It has no publisher, polling/locking, retry, or failure-recording columns.
 
 ---
 
@@ -129,10 +137,16 @@ metadata. No release, reconciliation, or additional Kafka table exists.
 - Only `StockReserved` and `ReservationExpired` persisted event types are
   publishable; unsupported, null, blank, or unknown values fail the whole batch
   before the first Kafka send.
-- OrderService contains the Week 5 Slice 1 bootstrap and the framework-free
-  Week 5 Slice 2 `Order` aggregate. It still has no API, persistence, JPA,
-  Flyway, PostgreSQL access, Redis, Kafka, idempotency infrastructure, outbox,
-  scheduler, DTO, repository, or cross-service behavior.
+- OrderService is complete through Task 5.4: PostgreSQL-authoritative
+  idempotency, Order persistence, and one Order-owned initial `OrderCreated`
+  outbox event are implemented. The infrastructure repository owns the single
+  transaction for Order + Outbox persistence; Task 5.3's durable idempotency
+  write remains outside that transaction.
+- `PurchaseIntentId` remains the Order-domain term; persistence and the
+  `OrderCreated` payload translate it to `reservation_id` / `reservationId`.
+  Event, Order, and Outbox identifiers are generated once and preserved.
+- OrderService still has no orders API/controller/DTO, Kafka interaction,
+  publisher, scheduler, outbox polling/locking, publish retry, or saga consumer.
 
 ---
 
@@ -168,8 +182,8 @@ metadata. No release, reconciliation, or additional Kafka table exists.
   independent revision-key eviction can increase PostgreSQL load.
 - Standalone Redis Testcontainers coverage does not prove Redis Cluster
   topology behavior.
-- A committed response lost before the client receives it can be retried and
-  decrement again; cross-request idempotency remains out of scope.
+- Task 5.5 still must connect the existing idempotency and atomic persistence
+  behavior to `POST /api/v1/orders`; no HTTP order path exists yet.
 - The SaleService migration defect remains outside this slice.
 ---
 
@@ -192,6 +206,11 @@ Week 5 Slice 1 / Build Plan task 5.1 is **COMPLETE** at `567450e`.
 
 Week 5 Slice 2 / Build Plan task 5.2 is **COMPLETE** at `df6d98f`.
 
-**Next sequential task:** Week 5 / Build Plan task 5.3 — `IdempotencyRecord`
-and dual-layer idempotency. Its contract must resolve `CONFLICT-002` before
-implementation.
+Week 5 Slice 3 / Build Plan task 5.3 is **COMPLETE** at `f9a5e3b`.
+
+Week 5 Slice 4 / Build Plan task 5.4 is **COMPLETE** at `cb2081f`.
+
+**Next sequential task:** Week 5 / Build Plan task 5.5 —
+`POST /api/v1/orders`. Task 5.6 idempotency-key value-object behavior, Task 5.7
+retry acceptance behavior, and Week 6 Kafka publication/consumption remain out
+of scope.

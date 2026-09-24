@@ -166,15 +166,16 @@ return stock - tonumber(ARGV[1])    -- remaining stock
 
 ### OrderService — `:8083`
 
-Idempotent order creation with transactional outbox. Returns `202 Accepted`
-immediately. Outbox poller uses `FOR UPDATE SKIP LOCKED` for concurrent-safe
-multi-pod operation.
+Order core is complete through Task 5.4: PostgreSQL-authoritative idempotency
+and atomic Order + `OrderCreated` outbox persistence are implemented. The
+`POST /api/v1/orders` API is the next task (5.5); Kafka publication remains
+Week 6 scope.
 
 ```
-1. Check Redis  idem:{userId}:{key}  → return cached response (fast path)
-2. Check Postgres idempotency_keys   → return stored response (durable fallback)
-3. Write Order + OutboxEvent in one @Transactional block
-4. Outbox poller publishes to Kafka every 500ms
+Implemented: Redis idem:{userId}:{key} → Postgres idempotency_keys fallback
+Implemented: Order + OutboxEvent written in one @Transactional block
+Task 5.5:   POST /api/v1/orders returns 202 or 400 for a missing key
+Week 6:     Outbox polling and Kafka publication
 ```
 
 ### NotificationService — `:8084`
@@ -450,9 +451,9 @@ fires 5 retries and asserts exactly 1 row in the database.
 
 **"How do you guarantee at-least-once Kafka delivery without data loss?"**
 Transactional Outbox — Order row and OutboxEvent row are written in a single
-`@Transactional` block. If Kafka is down for 5 minutes, events accumulate in the
-`order_outbox` table. The poller catches up on recovery. Kafka is never called
-inside a DB transaction — that would create a two-phase commit without the guarantees.
+`@Transactional` block. The row starts unpublished. The Week 6 poller will
+publish accumulated events after Kafka recovery; Kafka is not called inside
+the database transaction.
 
 **"Why `productId` and not `saleId` as the Kafka partition key for inventory-events?"**
 Two concurrent reservations for the same product must be processed sequentially

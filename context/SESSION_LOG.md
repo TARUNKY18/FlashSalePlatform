@@ -3174,3 +3174,78 @@ Final read-only code review: PASS
 
 - Week 5 / Build Plan task 5.3 — freeze the `IdempotencyRecord`/dual-layer
   idempotency contract and resolve `CONFLICT-002` before implementation.
+
+## SESSION-019
+**Date:** 2026-09-03
+**Milestone:** Week 5, Slice 3 — Build Plan task 5.3
+**Outcome:** COMPLETE — implementation and PostgreSQL verification committed
+**Engineer:** Tarun K Y
+**Implementation commit:** `f9a5e3b32b86c5418c9fb31ee7a31ed7ecad83e9`
+
+---
+
+### Implemented scope
+
+- Added PostgreSQL-authoritative idempotency keyed by
+  `(user_id, idempotency_key)` with an opaque response payload and validated
+  HTTP status.
+- Added the best-effort Redis `idem:{userId}:{idempotencyKey}` cache with a
+  fixed 24-hour TTL and PostgreSQL fallback/re-warming.
+- Preserved default startup without PostgreSQL or Redis. Order persistence,
+  OutboxEvent, HTTP API/DTO work, and Task 5.6/5.7 behavior remained excluded.
+
+### Verification
+
+- All 5 Task 5.3 PostgreSQL/Testcontainers tests passed with no failures or
+  skips. The relevant Gradle build and `git diff --check` passed.
+
+### Next sequential task
+
+- Week 5 / Build Plan task 5.4 — Order-owned `OutboxEvent` and atomic
+  Order/outbox persistence.
+
+## SESSION-020
+**Date:** 2026-09-23
+**Milestone:** Week 5, Slice 4 — Build Plan task 5.4
+**Outcome:** COMPLETE — implementation committed and pushed; canonical status documentation reconciled in the working tree
+**Engineer:** Tarun K Y
+**Implementation commit:** `cb2081fee5bd6fb14dab98a947df8554052f3dfd` (`feat(order): implement Task 5.4 order persistence and outbox`)
+
+---
+
+### Implemented scope
+
+- `Order.place(...)` creates exactly one Order-owned initial `OrderCreated`
+  event with stable domain-generated Order, event, and outbox IDs.
+- Added V2 `orders` and `order_outbox` schema and infrastructure mapping.
+  `orders` enforces `(user_id, idempotency_key)` and `reservation_id`
+  uniqueness; `order_outbox` has a restrictive Order FK and starts unpublished.
+- The infrastructure repository owns one PostgreSQL transaction for Order +
+  Outbox. Either both rows commit or both roll back. Task 5.3's durable
+  idempotency write remains outside this transaction.
+- Preserved `PurchaseIntentId` in the domain and translated it to
+  `reservation_id` / `reservationId` only at persistence/event boundaries.
+
+### Verification
+
+```text
+OrderService non-container:              35 passed, 0 failed, 0 skipped
+OrderService PostgreSQL/Testcontainers:  10 passed, 0 failed, 0 skipped
+Final release audit:                     PASS
+```
+
+- Docker/Testcontainers started successfully and ran all 10 Task 5.3/5.4
+  PostgreSQL integration tests. No Docker-dependent test was skipped.
+- No InventoryService, SaleService, build, bootstrap, Redis, Kafka, or other
+  unrelated production behavior changed.
+
+### Preserved boundaries
+
+- No `POST /api/v1/orders`, HTTP DTO/controller, Kafka producer, publisher,
+  scheduler, outbox polling/locking, publish retry, or saga consumer was added.
+- Task 5.6 idempotency-key value-object behavior, Task 5.7 retry acceptance
+  behavior, and Week 6 Kafka behavior remain deferred.
+
+### Next sequential task
+
+- Week 5 / Build Plan task 5.5 — `POST /api/v1/orders`.

@@ -293,21 +293,22 @@ InventoryService tests plus 16 SaleService tests (335 total).
 **Phase:** Core Services
 **Goal:** The `Order` aggregate is implemented with the Transactional Outbox pattern. A retry with the same `Idempotency-Key` returns the original response without creating a duplicate order. The outbox row is written atomically with the order row.
 
-**Verified implementation status (2026-09-03):** Week 5 Slices 1–3 / tasks
-5.1–5.3 are complete. Task 5.2 is committed at
+**Verified implementation status (2026-09-23):** Week 5 Slices 1–4 / tasks
+5.1–5.4 are complete. Task 5.2 is committed at
 `df6d98ff1b9620a31a03cfdf0d0427aab922d964`; Task 5.3 is committed at
-`f9a5e3b32b86c5418c9fb31ee7a31ed7ecad83e9`. The repository contains the
+`f9a5e3b32b86c5418c9fb31ee7a31ed7ecad83e9`; Task 5.4 is committed at
+`cb2081f`. The repository contains the
 framework-free in-memory `Order` aggregate, Order-owned `PurchaseIntentId`,
 required typed IDs, positive-only `Money`, an opaque nonblank string
 idempotency key, explicit `Instant` state timestamps, and manual
 `PENDING → CONFIRMED / CANCELLED / EXPIRED` transitions. The three target
 states are terminal and invalid transitions do not mutate the aggregate.
 Task 5.3 adds PostgreSQL-authoritative user-scoped idempotency and a best-effort
-24-hour Redis cache while preserving default no-infrastructure bootstrap.
-Thirty-seven tests were discovered: 32 initially passed and 5 PostgreSQL tests
-were initially skipped by Docker/Testcontainers API discovery. The subsequent
-Docker-backed rerun executed all 5 successfully (`5 passed, 0 failed, 0
-skipped`). The relevant Gradle build and `git diff --check` passed.
+24-hour Redis cache. Task 5.4 adds atomic Order + Outbox persistence while
+preserving default no-infrastructure bootstrap. Thirty-five non-container tests
+passed, followed by all 10 Task 5.3/5.4 PostgreSQL/Testcontainers tests (`10
+passed, 0 failed, 0 skipped`). The relevant Gradle build and `git diff --check`
+passed.
 
 ### Objectives
 
@@ -323,14 +324,29 @@ skipped`). The relevant Gradle build and `git diff --check` passed.
 | 5.1 | Spring Boot project: OrderService with virtual threads | Service — COMPLETE |
 | 5.2 | `Order` aggregate: `PlaceOrder` command, `PENDING → CONFIRMED / CANCELLED / EXPIRED` | Domain — COMPLETE |
 | 5.3 | `IdempotencyRecord` entity: Redis `idem:{userId}:{key}` check → Postgres `idempotency_keys` fallback | Domain — COMPLETE |
-| 5.4 | `OutboxEvent` entity: written in same `@Transactional` block as `Order` — never separately | Domain |
+| 5.4 | `OutboxEvent` entity: written in same `@Transactional` block as `Order` — never separately | Domain — COMPLETE |
 | 5.5 | `POST /api/v1/orders`: `400` if no `Idempotency-Key` header, `202` on success | API |
 | 5.6 | `IdempotencyKey` value object: canonical expiry behavior, `isSameRequest()`, `isExpired()` | Domain |
 | 5.7 | Integration test: 5 retries with same key → 1 `orders` row, 1 `order_outbox` row | Test |
 
-**Next sequential task:** 5.4 — `OutboxEvent` and atomic order/outbox
-persistence. Task 5.3 is complete and Docker-verified; its frozen boundaries
-remain in force.
+**Next sequential task:** 5.5 — `POST /api/v1/orders`. Tasks 5.3 and 5.4 are
+complete and Docker-verified; their frozen boundaries remain in force.
+
+### Task 5.4 verified implementation
+
+- `Order.place(...)` creates exactly one Order-owned initial `OrderCreated`
+  event; domain objects remain free of persistence and serialization types.
+- The infrastructure repository persists `orders` and `order_outbox` in one
+  PostgreSQL transaction. IDs are generated once and preserved; either both
+  rows commit or both roll back.
+- V2 creates the frozen `orders` and `order_outbox` schemas. The outbox row has
+  a restrictive Order FK, unique stable event ID, canonical envelope/payload,
+  and an unpublished initial state.
+- The Task 5.3 `idempotency_keys` write is not part of the Task 5.4 transaction.
+  No HTTP API, Kafka interaction, publisher, scheduler, polling/locking, or
+  retry behavior was introduced.
+- Verification passed 35 non-container tests and all 10 Task 5.3/5.4
+  PostgreSQL/Testcontainers tests (`10 passed, 0 failed, 0 skipped`).
 
 ### Task 5.4 frozen contract
 
