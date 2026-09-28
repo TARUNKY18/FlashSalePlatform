@@ -2,7 +2,7 @@
 ## Flash Sale Platform — Single Source of Truth
 **Version:** 3 (replaces Version 2, 2026-06-17)
 
-> **Implementation status warning (updated 2026-09-23):** Broad historical
+> **Implementation status warning (updated 2026-09-25):** Broad historical
 > implementation-status fields in this document remain stale. The verified
 > Slice 6 and Week 5 Slices 1–4 facts below have been reconciled; for complete current implementation
 > truth, see `HANDOFF.md` and `context/CURRENT_STATE.md`. The architecture, ADR,
@@ -326,7 +326,9 @@ Location: `FlashSalePlatform/Makefile` — VERIFIED (moved from `deployment/dock
 
 ## APIs
 
-**Status: PLANNED — 0 of 7 endpoints implemented. No Java code exists in the repository.**
+**Status:** SaleService and InventoryService endpoints are implemented for their
+completed milestones. Task 5.5 `POST /api/v1/orders` is implemented and verified
+by the repository-wide test suite (398 passed, 0 failed, 0 errors, 0 skipped).
 
 | Endpoint | Owner | Notes |
 |---|---|---|
@@ -336,12 +338,46 @@ Location: `FlashSalePlatform/Makefile` — VERIFIED (moved from `deployment/dock
 | `GET /api/v1/sales/{id}/active` | SaleService | Hot path — must be served from Redis; never touches Postgres while sale is `ACTIVE` |
 | `GET /api/v1/sales/{id}/history` | SaleService | Immutable audit trail |
 | `POST /api/v1/reservations` | InventoryService | Requires `Idempotency-Key`; returns `201`/`409 SOLD_OUT`/`409 SALE_NOT_ACTIVE`/`429` |
-| `POST /api/v1/orders` | OrderService | Requires `Idempotency-Key` (`400` if missing); returns `202 Accepted` immediately |
+| `POST /api/v1/orders` | OrderService | Task 5.5 contract frozen; body requires `reservationId`, `userId`, `saleId`, `amount`, and `currency`; requires `Idempotency-Key`; returns canonical `202 Accepted` response |
 
-Week 5 Slices 1–3 intentionally do not implement
+Week 5 Slices 1–4 intentionally do not implement
 `POST /api/v1/orders`; smoke verification returned HTTP 404.
 
-All mutating endpoints require and propagate a `traceId` (UUID v4) via `X-Trace-Id`. All endpoints require a valid bearer token validated at the API gateway; services trust the gateway-propagated `userId` header and do not re-validate tokens.
+All mutating endpoints require and propagate a `traceId` (UUID v4) via
+`X-Trace-Id`. Gateway authentication and identity propagation remain planned;
+the repository defines no authoritative gateway `userId` header name or
+implementation. The frozen Task 5.5 contract therefore sources `userId` from
+the request body and must not invent a gateway identity header.
+
+**Frozen Task 5.5 API contract (documentation-only, 2026-09-25):**
+
+- The required request body fields are `reservationId`, `userId`, `saleId`,
+  `amount`, and `currency`. `reservationId` maps to the existing
+  `PurchaseIntentId`. The request supplies `saleId`, `amount`, and `currency`
+  because no authoritative in-scope source exists without Kafka, a projection,
+  synchronous cross-service HTTP, or schema changes.
+- Success is HTTP `202` within 100 ms P99 with exactly
+  `{"orderId":"<order id>","status":"PENDING"}`. The byte-equivalent JSON and
+  HTTP status are stored and replayed through the existing user-scoped
+  `(userId, idempotencyKey)` mechanism.
+- Task 5.4 remains unchanged: `OrderRepository` atomically writes only Order +
+  Outbox. Idempotency persistence stays separate. Recovery after a committed
+  Order but missing idempotency record uses an additive Order lookup by
+  `(userId, idempotencyKey)`, reconstructs the canonical response, restores the
+  idempotency record, and returns `202`. The same lookup handles the loser of a
+  concurrent same-key uniqueness race without exposing a persistence error.
+- Missing `Idempotency-Key` returns
+  `400 {"error":"MISSING_IDEMPOTENCY_KEY","message":"Idempotency-Key header is required."}`
+  before business logic. Other malformed values return
+  `400 {"error":"INVALID_REQUEST","message":"<specific validation message>"}`.
+  Unexpected database failure returns
+  `500 {"error":"DATABASE_ERROR","message":"Database operation failed."}`.
+- A `reservationId` already owned by another Order returns
+  `409 {"error":"DUPLICATE_RESERVATION","message":"An order already exists for this reservation."}`.
+  Same-key replay takes precedence.
+- Reservation expiry/consumption validation, `RESERVATION_EXPIRED`,
+  `RESERVATION_ALREADY_CONSUMED`, Inventory Kafka consumption, and synchronous
+  InventoryService calls remain deferred beyond Task 5.5.
 
 ---
 
@@ -536,9 +572,10 @@ Task 5.4 verification passed 35 non-container OrderService tests and all 10
 Task 5.3/5.4 PostgreSQL/Testcontainers tests (`10 passed, 0 failed, 0 skipped`).
 The relevant Gradle build and `git diff --check` also passed.
 
-**Immediate next task:** Week 5 / Build Plan task 5.5 — implement
-`POST /api/v1/orders` without pulling in Task 5.6, Task 5.7, or Week 6 Kafka
-publication/consumption behavior.
+**Immediate next task:** Week 5 / Build Plan task 5.6 — implement the
+`IdempotencyKey` value object. Task 5.5 is implemented and repository-wide
+verified (398 passed, 0 failed, 0 errors, 0 skipped); its frozen contract
+remains in force.
 
 ---
 

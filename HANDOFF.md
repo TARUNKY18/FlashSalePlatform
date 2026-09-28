@@ -1,8 +1,9 @@
 # Flash Sale Platform — Engineering Handoff
 
-**Handoff date:** 2026-09-23
+**Handoff date:** 2026-09-27
 
-**Current milestone:** Week 5 — OrderService (complete through Slice 4 / Build Plan task 5.4)
+**Current milestone:** Week 5 — OrderService (implementation complete through
+Slice 5 / Build Plan task 5.5; working tree uncommitted)
 
 **Week 3 status:** COMPLETE — all implementation slices committed; documentation reconciled
 
@@ -26,19 +27,20 @@
 
 **Week 5, Slice 4 status:** COMPLETE — Build Plan task 5.4; Order-owned `OrderCreated`, atomic Order + Outbox persistence, frozen V2 schema, and 10/10 passing Task 5.3/5.4 PostgreSQL/Testcontainers tests; committed `cb2081f`
 
+**Week 5, Slice 5 status:** IMPLEMENTED AND VERIFIED; UNCOMMITTED — frozen `POST /api/v1/orders` contract, response persistence/replay, crash/concurrency recovery, structured errors, and 18 new tests; 63/63 OrderService and 398/398 repository tests passed
+
 **Branch:** `main`
 
-**Latest commit:** `cb2081fee5bd6fb14dab98a947df8554052f3dfd` (`feat(order): implement Task 5.4 order persistence and outbox`); local `main` and `origin/main` both resolved to this commit at verification
+**Latest commit:** `ab86ed82761ca503c4ae22ae4b49a4d10c2adcc7` (`feat(docs): updated docs for 5.4 implementation`); local `main` and `origin/main` both resolved to this commit at Task 5.5 contract-freeze start. Task 5.4 implementation remains `cb2081f`.
 
-**Working tree at reconciliation start:** clean; Task 5.4 is committed and pushed.
+**Working tree at Task 5.5 contract-freeze start:** no tracked changes; pre-existing untracked `services/inventory-service/bin/` and `services/sale-service/bin/` directories were left untouched.
 
-**Audience:** The senior engineer or Codex session preparing Week 5 / Build Plan task 5.5
+**Audience:** The senior engineer reviewing Task 5.5 or preparing Week 5 / Build Plan task 5.6
 
 Week 3 and Week 4 are complete. Week 4 Slices 1–6 remain complete and verified.
-Week 5 Slices 1–4 are complete. This handoff reflects the committed Order
-domain, idempotency, persistence, and transactional-outbox state before task
-5.5. Thirty-five non-container OrderService tests and all 10 Task 5.3/5.4
-PostgreSQL/Testcontainers tests passed.
+Week 5 Slices 1–5 are complete; Task 5.5 remains uncommitted for review. The
+full repository verification passed 398 tests with no failures, errors, or
+skips, including 63 OrderService tests and 16 PostgreSQL/Testcontainers tests.
 
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
@@ -1547,7 +1549,9 @@ Week 3 tasks and were not introduced.
 - Spring virtual threads are enabled; Actuator exposes health and info.
 - Smoke verification confirmed startup without PostgreSQL, Redis, Kafka, or
   other external infrastructure and HTTP 200 `UP` at `/actuator/health`.
-- `/api/v1/orders` is not implemented and returned HTTP 404.
+- `POST /api/v1/orders` implements the frozen five-field request, exact
+  `Idempotency-Key`, canonical `202` response, byte-equivalent replay, and
+  structured `400`/`409`/`500` errors under the infrastructure profile.
 - `Order.place(...)` creates a version-0 `PENDING` aggregate with an Order-owned
   `PurchaseIntentId`, typed `OrderId`/`UserId`/`SaleId`, positive-only `Money`,
   an opaque non-null/nonblank string idempotency key, and explicit creation time.
@@ -1563,10 +1567,49 @@ Week 3 tasks and were not introduced.
   `reservation_id` / `reservationId` only at persistence/event boundaries.
 - The Task 5.3 durable idempotency write is not part of the Task 5.4 Order +
   Outbox transaction.
-- No orders API/controller/DTO, Kafka interaction, publisher, scheduler,
-  polling/locking, publish retry, or saga consumer is implemented.
-- Verification: 35 non-container OrderService tests and all 10 Task 5.3/5.4
-  PostgreSQL/Testcontainers tests passed; no tests failed or were skipped.
+- Additive Order lookups recover crash-gap and concurrent same-key requests
+  without changing the Task 5.4 Order + Outbox write transaction.
+- No Kafka interaction, publisher, scheduler, polling/locking, publish retry,
+  saga consumer, migration, or synchronous cross-service call was added.
+- Verification: 47 non-container and 16 PostgreSQL/Testcontainers OrderService
+  tests passed, followed by the full 398-test repository regression.
+
+## Frozen Task 5.5 Contract
+
+- `POST /api/v1/orders` requires `Idempotency-Key` and a body containing the
+  five required fields `reservationId`, `userId`, `saleId`, `amount`, and
+  `currency`. `reservationId` maps to `PurchaseIntentId`. The request supplies
+  `saleId`, `amount`, and `currency` because the current slice has no
+  authoritative source for them without deferred integration work.
+- `userId` comes from the request body. No authoritative gateway identity
+  header name or implementation exists, so Task 5.5 must not invent one.
+- A new request returns HTTP `202` within 100 ms P99 with exactly
+  `{"orderId":"<order id>","status":"PENDING"}`. The existing idempotency
+  mechanism stores and replays the original HTTP status and byte-equivalent JSON.
+- Idempotency remains `(userId, idempotencyKey)`, with permanent PostgreSQL
+  authority and a best-effort Redis cache using a non-extending 24-hour TTL.
+- Task 5.4's Order + Outbox transaction is unchanged. If that transaction
+  committed before the idempotency record was stored, or if a concurrent
+  same-key request loses the Order uniqueness race, Task 5.5 performs an
+  additive Order lookup by `(userId, idempotencyKey)`, reconstructs the
+  canonical response, restores the idempotency response, and returns `202`.
+  No migration or write-transaction change is permitted.
+- Missing `Idempotency-Key` returns
+  `400 {"error":"MISSING_IDEMPOTENCY_KEY","message":"Idempotency-Key header is required."}`
+  before business logic. Other malformed values return
+  `400 {"error":"INVALID_REQUEST","message":"<specific validation message>"}`.
+  Unexpected database failure returns
+  `500 {"error":"DATABASE_ERROR","message":"Database operation failed."}`
+  and must never be reported as `202`.
+- A reservation already owned by another Order returns
+  `409 {"error":"DUPLICATE_RESERVATION","message":"An order already exists for this reservation."}`.
+  Same-key replay takes precedence.
+- `RESERVATION_EXPIRED`, `RESERVATION_ALREADY_CONSUMED`, Inventory-event
+  validation, Kafka consumers, synchronous InventoryService calls, pricing
+  lookup, Task 5.6 behavior, and Task 5.7 proof remain out of scope.
+- Implementation must reuse `Order.place(...)`, `OrderRepository`, the Task 5.4
+  atomic Order + Outbox persistence, `IdempotencyService`, and existing
+  domain-generated identifiers. It must not change Task 5.4 production behavior.
 
 ---
 
@@ -1596,11 +1639,14 @@ No Week 4 implementation slices remain.
 | Slice 2: Order aggregate and state machine (task 5.2) | ✔ DONE | `df6d98f`; SESSION-018 |
 | Slice 3: PostgreSQL-authoritative dual-layer idempotency (task 5.3) | ✔ DONE | `f9a5e3b` |
 | Slice 4: Atomic Order + Outbox persistence (task 5.4) | ✔ DONE | `cb2081f` |
+| Slice 5: `POST /api/v1/orders` (task 5.5) | ✔ DONE; UNCOMMITTED | SESSION-022 |
 
-**Next sequential task:** Week 5 / Build Plan task 5.5 —
-`POST /api/v1/orders`. Task 5.6 idempotency-key value-object behavior, Task 5.7
-retry acceptance behavior, and Week 6 Kafka publication/consumption remain out
-of scope.
+Task 5.5 is implemented and verified in the working tree but has no
+implementation commit.
+
+**Next sequential task:** Week 5 / Build Plan task 5.6 — canonical
+`IdempotencyKey` value-object behavior. Task 5.7 retry acceptance behavior and
+Week 6 Kafka publication/consumption remain out of scope.
 
 ---
 

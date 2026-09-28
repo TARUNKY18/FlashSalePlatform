@@ -325,12 +325,55 @@ passed.
 | 5.2 | `Order` aggregate: `PlaceOrder` command, `PENDING → CONFIRMED / CANCELLED / EXPIRED` | Domain — COMPLETE |
 | 5.3 | `IdempotencyRecord` entity: Redis `idem:{userId}:{key}` check → Postgres `idempotency_keys` fallback | Domain — COMPLETE |
 | 5.4 | `OutboxEvent` entity: written in same `@Transactional` block as `Order` — never separately | Domain — COMPLETE |
-| 5.5 | `POST /api/v1/orders`: `400` if no `Idempotency-Key` header, `202` on success | API |
+| 5.5 | `POST /api/v1/orders`: frozen request, idempotency/recovery, response, and error contract | API — COMPLETE |
 | 5.6 | `IdempotencyKey` value object: canonical expiry behavior, `isSameRequest()`, `isExpired()` | Domain |
 | 5.7 | Integration test: 5 retries with same key → 1 `orders` row, 1 `order_outbox` row | Test |
 
-**Next sequential task:** 5.5 — `POST /api/v1/orders`. Tasks 5.3 and 5.4 are
-complete and Docker-verified; their frozen boundaries remain in force.
+**Next sequential task:** 5.6 — `IdempotencyKey` value object. Task 5.5 is
+implemented and repository-wide verified (398 passed, 0 failed, 0 errors,
+0 skipped); its frozen boundaries remain in force.
+
+### Task 5.5 frozen contract (documentation-only, 2026-09-25)
+
+- `POST /api/v1/orders` requires `Idempotency-Key` and the five request-body
+  fields `reservationId`, `userId`, `saleId`, `amount`, and `currency`.
+  `reservationId` maps to the existing `PurchaseIntentId`. The request supplies
+  `saleId`, `amount`, and `currency` because Task 5.5 has no authoritative
+  in-scope source for them without Kafka, a new projection, synchronous
+  cross-service HTTP, or a schema change. No pricing/product lookup is added.
+- `userId` is sourced from the request body. The repository has no
+  authoritative gateway-propagated identity-header name or implementation, so
+  Task 5.5 does not introduce one.
+- A new request returns HTTP `202 Accepted` within 100 ms P99 with exactly
+  `{"orderId":"<order id>","status":"PENDING"}`. The existing idempotency
+  mechanism persists and replays the original HTTP status and byte-equivalent
+  JSON response. Identity remains `(userId, idempotencyKey)`; PostgreSQL is the
+  permanent authority, Redis is best-effort with a 24-hour TTL, and cache hits
+  do not extend that TTL.
+- Task 5.4's Order + Outbox write transaction remains unchanged and separate
+  from idempotency persistence. If the Order committed before the idempotency
+  response was saved, an idempotency miss performs an additive Order lookup by
+  `(userId, idempotencyKey)`, reconstructs the canonical response, restores the
+  idempotency response, and returns `202`. No migration is required.
+- If concurrent same-key requests race, database uniqueness permits only one
+  Order. The losing request must not expose the persistence exception: it uses
+  the same additive lookup and reconstruction path, returning the same `202`.
+  No second Order or Outbox row is created.
+- Missing `Idempotency-Key` is rejected before business logic with exactly
+  `400 {"error":"MISSING_IDEMPOTENCY_KEY","message":"Idempotency-Key header is required."}`.
+  Other malformed or invalid request values return
+  `400 {"error":"INVALID_REQUEST","message":"<specific validation message>"}`.
+  Unexpected database failures return exactly
+  `500 {"error":"DATABASE_ERROR","message":"Database operation failed."}`
+  and must never be reported as `202`.
+- A `reservationId` already owned by another Order returns exactly
+  `409 {"error":"DUPLICATE_RESERVATION","message":"An order already exists for this reservation."}`.
+  Existing `(userId, idempotencyKey)` replay takes precedence.
+- Task 5.5 reuses `Order.place(...)`, `OrderRepository`, the Task 5.4 atomic
+  Order + Outbox persistence, `IdempotencyService`, and domain-generated IDs.
+  It excludes reservation-expiry/consumption validation, their `422` errors,
+  Inventory events, Kafka consumers, synchronous InventoryService calls,
+  Task 5.6 behavior, and Task 5.7 retry-proof implementation.
 
 ### Task 5.4 verified implementation
 
@@ -416,10 +459,12 @@ complete and Docker-verified; their frozen boundaries remain in force.
 
 ### Deliverables
 
-- `POST /api/v1/orders` returns `202 Accepted` within 50ms
-- `400 Bad Request` returned when `Idempotency-Key` header is absent
+- `POST /api/v1/orders` returns the canonical `202 Accepted` response within 100ms P99
+- `400 Bad Request` with the frozen structured body when `Idempotency-Key` is absent
+- Frozen structured `400 INVALID_REQUEST`, `409 DUPLICATE_RESERVATION`, and `500 DATABASE_ERROR` responses
 - 5 retries with same key → exactly 1 order row in `orders_db`
-- Kill process between DB write and response → retry returns the original response (Postgres fallback)
+- Commit Order + Outbox before idempotency save → retry reconstructs and restores the original response through the additive Order lookup
+- Concurrent same-key uniqueness loser returns the canonical response without creating a second Order or Outbox row
 - `order_outbox` row with `published=false` exists after order creation
 
 ### Dependencies
@@ -430,9 +475,11 @@ complete and Docker-verified; their frozen boundaries remain in force.
 ### Definition of Done
 
 ```
-[ ] POST /api/v1/orders returns 202 in < 50ms
-[ ] Missing Idempotency-Key header returns 400 with structured error body
+[ ] POST /api/v1/orders returns the canonical 202 response within 100ms P99
+[ ] Missing Idempotency-Key header returns the exact frozen 400 response before business logic
+[ ] Invalid input, duplicate reservation, and database failure return the frozen structured 400/409/500 responses
 [ ] 5 retries with same key: 1 orders row, 1 outbox row, 5 identical 202 responses
+[ ] Crash gap and concurrent same-key loser recover through Order lookup without changing the Order + Outbox transaction
 [ ] Order + OutboxEvent write is atomic: crash test (kill -9 mid-transaction) leaves no partial state
 [x] IdempotencyRecord committed to permanent Postgres first; Redis populated afterward best-effort with TTL 24h
 [ ] IdempotencyKey.isExpired() boundary test: key at 23h59m59s vs 24h00m01s
@@ -448,7 +495,7 @@ complete and Docker-verified; their frozen boundaries remain in force.
 |---|---|---|
 | JPA `@Transactional` and Kafka publish in same method | High | This is the bug to prevent: the outbox pattern exists to solve this. Never call `KafkaTemplate.send()` inside `@Transactional` |
 | Redis idempotency key evicted before Postgres is checked | Low | `idem:` keys use fixed 24h TTL; eviction is LRU — recently-used idempotency keys are last to be evicted |
-| Concurrent requests with the same user-scoped key race to write | Medium | `(user_id, idempotency_key)` durable uniqueness is the database-level guard; the second writer is handled as an idempotent hit |
+| Concurrent requests with the same user-scoped key race to write | Medium | `(user_id, idempotency_key)` durable uniqueness is the database-level guard; the uniqueness loser performs the additive Order lookup, reconstructs/restores the canonical response, and returns the same `202` |
 
 ---
 

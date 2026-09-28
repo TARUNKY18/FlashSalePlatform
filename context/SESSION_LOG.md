@@ -3249,3 +3249,133 @@ Final release audit:                     PASS
 ### Next sequential task
 
 - Week 5 / Build Plan task 5.5 — `POST /api/v1/orders`.
+
+## SESSION-021
+**Date:** 2026-09-25
+**Milestone:** Week 5, Slice 5 — Task 5.5 contract freeze
+**Outcome:** COMPLETE — authoritative contract documented; implementation not started
+**Engineer:** Tarun K Y
+**Implementation commit:** None — documentation-only working-tree change; not staged or committed
+
+---
+
+### Frozen contract
+
+- `POST /api/v1/orders` requires `Idempotency-Key` and the five body fields
+  `reservationId`, `userId`, `saleId`, `amount`, and `currency`.
+  `reservationId` maps to `PurchaseIntentId`. The request supplies `saleId`,
+  `amount`, and `currency` because Task 5.5 has no authoritative in-scope
+  source without Kafka, a projection, synchronous cross-service HTTP, or a
+  schema change. No pricing/product lookup is introduced.
+- `userId` is body-sourced because the repository has no authoritative gateway
+  identity-header name or implementation.
+- A new request returns HTTP `202` within 100ms P99 with exactly
+  `{"orderId":"<order id>","status":"PENDING"}`. The existing user-scoped
+  idempotency mechanism persists and replays the original status and
+  byte-equivalent response. PostgreSQL remains authoritative; Redis remains
+  best-effort with a fixed, non-extending 24-hour TTL.
+- Task 5.4's Order + Outbox transaction remains unchanged and separate from
+  idempotency persistence. Crash-gap and concurrent same-key recovery use an
+  additive Order lookup by `(userId, idempotencyKey)` to reconstruct and
+  restore the canonical response. Existing uniqueness prevents a second Order
+  or Outbox row; no migration is required.
+- Missing `Idempotency-Key` returns the frozen `400 MISSING_IDEMPOTENCY_KEY`
+  response before business logic. Other malformed input returns
+  `400 INVALID_REQUEST`; unexpected database failure returns
+  `500 DATABASE_ERROR`; and a different request reusing an owned
+  `reservationId` returns `409 DUPLICATE_RESERVATION`. Existing same-key replay
+  takes precedence over the duplicate-reservation conflict.
+- Reservation expiry/consumption validation and its `422` errors, Inventory
+  events, Kafka consumers, synchronous InventoryService calls, Task 5.6, and
+  Task 5.7 implementation remain deferred.
+
+### Architectural preservation
+
+- Task 5.5 must reuse `Order.place(...)`, `OrderRepository`, the Task 5.4
+  atomic Order + Outbox persistence, `IdempotencyService`, and existing
+  domain-generated identifiers.
+- No production source, test, schema, migration, or Task 5.4 behavior was
+  changed. No build or test was run for this documentation-only freeze.
+- The six authoritative documentation files were edited without staging or
+  committing. Pre-existing untracked service `bin/` directories were left
+  untouched.
+
+### Next sequential task
+
+- Implement the frozen Task 5.5 `POST /api/v1/orders` contract without pulling
+  in Task 5.6, Task 5.7, or later reservation-validation/Kafka behavior.
+
+## SESSION-022
+**Date:** 2026-09-27
+**Milestone:** Week 5, Slice 5 — Build Plan task 5.5
+**Outcome:** COMPLETE — implemented and verified in the working tree; not staged or committed
+**Engineer:** Tarun K Y
+**Implementation commit:** None
+
+---
+
+### Implemented scope
+
+- Added `POST /api/v1/orders` with required `Idempotency-Key` and validated
+  `reservationId`, `userId`, `saleId`, `amount`, and `currency` request fields.
+  The API maps directly to the existing Order value objects and
+  `Order.place(...)` without changing domain behavior.
+- Added the canonical HTTP `202` response containing only `orderId` and
+  `PENDING`. The response is serialized once, stored as the existing opaque
+  idempotency payload, and returned directly on replay with its stored status.
+- Reused PostgreSQL-authoritative `IdempotencyService` behavior and the
+  best-effort 24-hour Redis cache. Redis failure still falls back to
+  PostgreSQL; no Redis behavior changed.
+- Added read-only Order repository operations for `(userId, idempotencyKey)`
+  recovery and reservation-existence confirmation. The existing Order +
+  Outbox `save(...)` transaction remains unchanged.
+- Added crash-gap repair and concurrent same-key uniqueness recovery. A
+  uniqueness loser first finds the winning Order; only a proven reservation
+  collision returns `409 DUPLICATE_RESERVATION`. Other persistence failures
+  return the frozen `500 DATABASE_ERROR` response.
+- Added the frozen missing-header, invalid-request, duplicate-reservation, and
+  database-failure mappings. No raw database error is exposed.
+- Added the existing project-standard validation starter and 18 tests across
+  controller, command-service, and real PostgreSQL integration coverage.
+
+### Files changed
+
+- Created seven production files under OrderService `api`, `api.dto`, and
+  `application`, plus the three approved test files.
+- Modified only OrderService `build.gradle`, the `OrderRepository` application
+  port, the JPA adapter, and `SpringDataOrderRepository` for additive behavior.
+- Updated only `CURRENT_STATE.md`, `HANDOFF.md`, and this append-only log for
+  implementation status. Frozen contract decisions were not changed.
+
+### Verification
+
+```text
+OrderService non-container:              47 passed, 0 failed, 0 skipped
+OrderService PostgreSQL/Testcontainers:  16 passed, 0 failed, 0 skipped
+OrderService total:                      63 passed, 0 failed, 0 errors, 0 skipped
+InventoryService regression:            319 passed, 0 failed, 0 errors, 0 skipped
+SaleService regression:                 16 passed, 0 failed, 0 errors, 0 skipped
+Full repository:                        398 passed, 0 failed, 0 errors, 0 skipped
+```
+
+- Docker Engine 29 required the already-documented transient test-process
+  option `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`; repository configuration was
+  not changed.
+- `git diff --check` passed before the status closeout and is rerun in the
+  final scope audit.
+
+### Preserved boundaries
+
+- No domain aggregate, event, mapper, JPA entity, Outbox repository,
+  idempotency implementation, migration, application configuration, or
+  completed Task 5.2–5.4 test was modified.
+- No Kafka, scheduler, retry worker, cross-service HTTP/database access,
+  reservation validation/consumption, `422` behavior, Task 5.6, or Task 5.7
+  behavior was added.
+- The 100 ms P99 target remains unproven by a production-representative load
+  test; passing endpoint integration timings are not treated as P99 proof.
+
+### Next sequential task
+
+- Review and commit Task 5.5 separately when approved. The next implementation
+  slice is Week 5 / Build Plan task 5.6.

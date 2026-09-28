@@ -156,11 +156,17 @@ Acceptance criteria:
 > As a Buyer, I want to convert my reservation into a confirmed order, so that my purchase is recorded and I receive confirmation.
 
 Acceptance criteria:
-- `POST /api/v1/orders` with `reservationId`, `userId`, `Idempotency-Key` header.
-- Returns `202 Accepted` immediately; order is processed asynchronously.
+- `POST /api/v1/orders` with required body fields `reservationId`, `userId`,
+  `saleId`, `amount`, and `currency`, plus the required `Idempotency-Key`
+  header. Task 5.5 sources `userId` from this body.
+- Returns `202 Accepted` within 100ms P99 with exactly
+  `{ "orderId": "<order id>", "status": "PENDING" }`.
 - Idempotent: retrying with the same `Idempotency-Key` returns the same response without creating a duplicate order.
-- Buyer receives a notification (email and/or push) when order status transitions to `CONFIRMED`.
-- Returns `422 Unprocessable Entity` if reservation is expired or already consumed.
+- Buyer notification after transition to `CONFIRMED` is later asynchronous
+  architecture and is not part of Task 5.5.
+- Reservation-expiry/consumption validation and its `422 Unprocessable Entity`
+  responses require the later Inventory-event integration and are not part of
+  Task 5.5.
 
 ---
 
@@ -264,19 +270,58 @@ Redis restoration remains post-commit and is not represented by a
 
 ### 4.3 OrderService
 
-**FR-016** The system shall expose `POST /api/v1/orders` accepting `reservationId`, `userId`, and the `Idempotency-Key` header (required). Requests without `Idempotency-Key` shall receive `400 Bad Request`.
+**FR-016** The system shall expose `POST /api/v1/orders` accepting required
+request-body fields `reservationId`, `userId`, `saleId`, `amount`, and
+`currency`, plus the required `Idempotency-Key` header. `reservationId` maps to
+the Order domain's `PurchaseIntentId`. For Task 5.5, the request supplies
+`saleId`, `amount`, and `currency` because no authoritative source exists
+inside the slice without Kafka, a new projection, synchronous cross-service
+HTTP, or a schema change. `userId` is sourced from the body because the
+repository defines no authoritative gateway identity-header name or
+implementation. Task 5.5 adds no pricing or product lookup.
 
-**FR-017** The system shall check for an existing idempotency key in Redis (`idem:{key}`) before processing. On hit, return the cached response immediately without re-processing.
+**FR-017** The system shall check for an existing user-scoped idempotency key
+in Redis (`idem:{userId}:{idempotencyKey}`) before processing. On hit, return
+the stored HTTP status and byte-equivalent response immediately without
+re-processing. Redis remains best-effort with a fixed 24-hour TTL that cache
+hits do not extend.
 
 **FR-018** On Redis miss, the system shall check the Postgres `idempotency_keys` table. On hit, return the stored response and re-warm the Redis cache.
 
 **FR-019** Order creation shall write the `orders` record and the `order_outbox` event in a single DB transaction. Partial success (order written, outbox not written, or vice versa) is not permitted.
+
+**Task 5.5 contract freeze (2026-09-25):**
+- A new request returns HTTP `202 Accepted` within 100ms P99 with exactly
+  `{ "orderId": "<order id>", "status": "PENDING" }`. The response and status
+  are persisted through the existing idempotency mechanism. Replay returns the
+  originally stored status and byte-equivalent JSON.
+- Idempotency identity remains `(userId, idempotencyKey)`. PostgreSQL remains
+  the permanent authority; Redis remains a best-effort cache.
+- The Task 5.4 Order + Outbox transaction remains unchanged and idempotency
+  persistence remains separate. If Order + Outbox committed before the
+  idempotency response was saved, an idempotency miss performs an additive
+  Order lookup by `(userId, idempotencyKey)`, reconstructs the canonical
+  response, restores the idempotency response, and returns `202`.
+- If same-key requests race, the database uniqueness constraint permits one
+  Order. The losing request uses that same lookup/reconstruction path and does
+  not expose the persistence exception or create a second Order/Outbox row.
+- A `reservationId` already owned by another Order returns
+  `409 { "error": "DUPLICATE_RESERVATION", "message": "An order already exists for this reservation." }`.
+  Existing same-key replay takes precedence.
+- Task 5.5 reuses `Order.place(...)`, `OrderRepository`, the atomic Order +
+  Outbox persistence, `IdempotencyService`, and domain-generated identifiers.
+  It requires no migration and introduces no Kafka, synchronous service call,
+  projection, Redis redesign, or Task 5.6/5.7 behavior.
 
 **FR-020** The outbox poller shall run on a configurable interval (default 500ms). It shall publish all unpublished outbox rows to Kafka and mark them `published = true` within the same operation.
 
 **FR-021** The system shall publish an `OrderCreated` event to `order-events` (partition key: `saleId`) on successful order creation. Event payload shall include: `eventId`, `eventVersion`, `orderId`, `reservationId`, `userId`, `saleId`, `amount`, `occurredAt`.
 
 **FR-022** The system shall consume `inventory-events` (consumer group: `order-svc-reservation-consumer`) to confirm that a reservation exists and is valid before creating an order. An order referencing an expired or non-existent reservation shall be rejected with `422 Unprocessable Entity`.
+
+FR-022 belongs to the later reservation-validation architecture. It is
+explicitly deferred beyond Task 5.5; Task 5.5 does not consume
+`inventory-events` or synchronously call InventoryService.
 
 **FR-023** On `PaymentFailed` (future stub), the system shall publish `ReservationReleased` to trigger stock restoration in InventoryService.
 
@@ -411,7 +456,11 @@ Every saga step that can fail shall have a defined compensating transaction. No 
 ### 5.5 Security
 
 **NFR-019 — Authentication**
-All API endpoints shall require a valid bearer token. Token validation occurs at the API gateway. Services shall trust the gateway-propagated `userId` header; they shall not re-validate tokens.
+The target architecture requires valid bearer tokens and gateway validation.
+No authoritative gateway-propagated `userId` header name or implementation
+currently exists in the repository. Consequently, the frozen Task 5.5 contract
+uses the request-body `userId` and must not invent a gateway identity header.
+Later gateway identity propagation requires a separately defined contract.
 
 **NFR-020 — Rate Limiting**
 10 reservation requests per user per minute enforced at the gateway via Redis sliding window. Violation returns `429 Too Many Requests` with `Retry-After` header.
@@ -505,6 +554,9 @@ Expected behaviour:
 - Stock has already been released via `StockReleased` event when the reservation expired.
 - Buyer must re-attempt reservation if sale is still active.
 
+This error belongs to the later reservation-validation architecture and is not
+implemented or required by Task 5.5.
+
 ---
 
 ### 6.2 Order Errors
@@ -520,8 +572,34 @@ Trigger: Client retries `POST /api/v1/orders` with the same `Idempotency-Key` wi
 Expected behaviour:
 - Redis cache hit: original response returned within 10ms.
 - No second order record created.
-- Response is identical to the original (same `orderId`, same status).
+- Response is byte-equivalent to the original (same `orderId`, same status).
 - HTTP status code matches original response.
+- On a cache miss, PostgreSQL remains authoritative. If the idempotency response
+  is absent after an Order commit, or a concurrent same-key request loses the
+  Order uniqueness race, OrderService queries the Order by
+  `(userId, idempotencyKey)`, reconstructs/restores the canonical response, and
+  returns `202` without a second Order or Outbox row.
+
+**ERR-006A — Invalid Order Request**
+Trigger: The order request is malformed or contains an invalid required value.
+Expected behaviour:
+- OrderService returns
+  `400 { "error": "INVALID_REQUEST", "message": "<specific validation message>" }`.
+
+**ERR-006B — Database Failure During Order Creation**
+Trigger: An unexpected PostgreSQL/database operation fails.
+Expected behaviour:
+- OrderService returns
+  `500 { "error": "DATABASE_ERROR", "message": "Database operation failed." }`.
+- A failed durable operation must never be reported as `202 Accepted`.
+
+**ERR-006C — Duplicate Reservation**
+Trigger: A different request references a `reservationId` already owned by an
+existing Order.
+Expected behaviour:
+- Existing `(userId, idempotencyKey)` replay takes precedence.
+- Otherwise OrderService returns
+  `409 { "error": "DUPLICATE_RESERVATION", "message": "An order already exists for this reservation." }`.
 
 **ERR-007 — Outbox Poller Failure**
 Trigger: Background outbox poller crashes or fails to publish to Kafka.
@@ -645,7 +723,11 @@ Expected: Kafka consumers are idempotent (deduplicate by `eventId`). Duplicate `
 
 **EC-010 — Order Created for Already-Consumed Reservation**
 Scenario: A reservation is consumed by one order. A second request (different `Idempotency-Key`) references the same `reservationId`.
-Expected: OrderService finds the `reservationId` in the `orders` table with status `CONSUMED`. Returns `422 { "error": "RESERVATION_ALREADY_CONSUMED", "orderId": "<original>" }`.
+Task 5.5 expected result: the existing unique `reservation_id` identifies a
+duplicate reservation and OrderService returns
+`409 { "error": "DUPLICATE_RESERVATION", "message": "An order already exists for this reservation." }`.
+The distinct `RESERVATION_ALREADY_CONSUMED` validation and `422` response are
+deferred to the later reservation-validation architecture.
 
 **EC-011 — Saga Left Incomplete (Compensation Exhausted)**
 Scenario: `PaymentFailed` event is published. OrderService attempts to publish `ReservationReleased`, but Kafka is down. Retries exhausted after 3 attempts.
