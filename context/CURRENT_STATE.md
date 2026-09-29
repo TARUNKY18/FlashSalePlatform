@@ -1,6 +1,6 @@
 # CURRENT_STATE.md
-**Milestone:** Week 5 — OrderService (implementation complete through Slice 6 / task 5.6)
-**Status:** 🟢 TASK 5.6 IMPLEMENTED AND VERIFIED; UNCOMMITTED
+**Milestone:** Week 5 — OrderService (implementation complete through Slice 7 / task 5.7)
+**Status:** 🟢 TASK 5.7 IMPLEMENTED AND VERIFIED; UNCOMMITTED
 **Date:** 2026-09-29
 **Engineer:** Tarun K Y
 
@@ -11,12 +11,12 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `5f5a582` — `Implemented 5.5`; local `main` and `origin/main` match |
-| Implementation commit status | Task 5.6 is implemented in two untracked OrderService files; not staged or committed |
-| Build | Full repository `test --rerun-tasks` passed with Docker: 404 passed, 0 failed, 0 errors, 0 skipped |
+| Latest commit | `f0a039a` — `Implemented task 5.6`; local `main` and `origin/main` match |
+| Implementation commit status | Task 5.7 changes are not staged or committed |
+| Build | Full repository `test --rerun-tasks` passed with Docker: 405 passed, 0 failed, 0 errors, 0 skipped |
 | Production Java files | 135 total: InventoryService 70, SaleService 30, OrderService 35 |
 | Test classes | 56 total; OrderService has 13 test classes |
-| OrderService tests | 69 passed, 0 failed, 0 errors, 0 skipped |
+| OrderService tests | 70 passed, 0 failed, 0 errors, 0 skipped |
 | Inventory / SaleService regression | 319 InventoryService and 16 SaleService tests passed; neither service's source or tests changed |
 
 ---
@@ -50,20 +50,22 @@
 | ✔ Order Idempotency (committed `f9a5e3b`) | Week 5 Slice 3 / task 5.3; PostgreSQL-authoritative `(user_id, idempotency_key)` durable record; best-effort 24-hour Redis cache and re-warming; default no-infrastructure bootstrap preserved; 5 PostgreSQL/Testcontainers tests passed |
 | ✔ Order Persistence + Transactional Outbox (committed `cb2081f`) | Week 5 Slice 4 / task 5.4; `Order.place(...)` creates one Order-owned `OrderCreated` event; `orders` and `order_outbox` persist atomically; stable IDs, canonical envelope/payload, restrictive FK, composite order uniqueness, unique reservation, unpublished initial outbox state; 10 PostgreSQL/Testcontainers tests passed across tasks 5.3/5.4 |
 | ✔ Orders API (committed `5f5a582`) | Week 5 Slice 5 / task 5.5; `POST /api/v1/orders`; five-field validated body and exact `Idempotency-Key`; canonical byte-equivalent `202` response persistence/replay; crash-gap and concurrent same-key recovery through additive Order lookup; proven duplicate reservation `409`; frozen `400`/`500` errors; no migration or Task 5.4 transaction change; 18 new tests |
-| ✔ IdempotencyKey Value Object (working tree; uncommitted) | Week 5 Slice 6 / task 5.6; framework-free UUID-v4 string record; null/blank/malformed/non-v4 rejection; record equality and hash code; `isSameRequest()`; fixed 24-hour `expiresAt()` and strict-after `isExpired()` boundary; 6 focused tests; no Task 5.5 wiring |
+| ✔ IdempotencyKey Value Object (committed `f0a039a`) | Week 5 Slice 6 / task 5.6; framework-free UUID-v4 string record; null/blank/malformed/non-v4 rejection; record equality and hash code; `isSameRequest()`; fixed 24-hour `expiresAt()` and strict-after `isExpired()` boundary; 6 focused tests; no Task 5.5 wiring |
+| ✔ Order Retry Acceptance Proof (working tree; uncommitted) | Week 5 Slice 7 / task 5.7; one initial `POST /api/v1/orders` plus five same-key retries return byte-equivalent `202` responses and leave one `orders`, one `order_outbox`, and one `idempotency_keys` row; test-only change |
 
 ---
 
 ## Verification
 
 ```text
-OrderService total:                      69 passed, 0 failed, 0 skipped
-OrderService PostgreSQL/Testcontainers:  16 passed, 0 failed, 0 skipped
-Full repository:                         404 passed, 0 failed, 0 errors, 0 skipped
-Task 5.6 final verification:              PASS
+Focused OrderPlacement integration:       7 passed, 0 failed, 0 skipped
+OrderService total:                      70 passed, 0 failed, 0 skipped
+OrderService PostgreSQL/Testcontainers:  17 passed, 0 failed, 0 skipped
+Full repository:                         405 passed, 0 failed, 0 errors, 0 skipped
+Task 5.7 final verification:              PASS
 ```
 
-Docker/Testcontainers successfully started and executed all 16 PostgreSQL
+Docker/Testcontainers successfully started and executed all 17 PostgreSQL
 integration tests; none were skipped for Docker availability. With the local
 Docker Engine 29 environment, Testcontainers 1.19.8 required the transient
 test-process option `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`; repository
@@ -229,9 +231,11 @@ Week 5 Slice 4 / Build Plan task 5.4 is **COMPLETE** at `cb2081f`.
 
 Week 5 Slice 5 / Build Plan task 5.5 is **COMPLETE** at `5f5a582`.
 
-Week 5 Slice 6 / Build Plan task 5.6 is **IMPLEMENTED AND VERIFIED; UNCOMMITTED**.
-All 69 OrderService tests and the 404-test repository regression passed with no
-failures, errors, or skips. Existing Task 5.5 behavior remains unchanged.
+Week 5 Slice 6 / Build Plan task 5.6 is **COMPLETE** at `f0a039a`.
 
-**Next sequential task:** Week 5 / Build Plan task 5.7 — retry acceptance
-proof. Week 6 Kafka publication/consumption remains out of scope.
+Week 5 Slice 7 / Build Plan task 5.7 is **IMPLEMENTED AND VERIFIED; UNCOMMITTED**.
+All 70 OrderService tests and the 405-test repository regression passed with no
+failures, errors, or skips. Existing Task 5.5 and Task 5.6 behavior remains unchanged.
+
+**Next sequential task:** Week 6 Kafka publication/consumption; it remains out
+of scope for the completed Task 5.7 slice.

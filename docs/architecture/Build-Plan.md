@@ -327,11 +327,14 @@ passed.
 | 5.4 | `OutboxEvent` entity: written in same `@Transactional` block as `Order` — never separately | Domain — COMPLETE |
 | 5.5 | `POST /api/v1/orders`: frozen request, idempotency/recovery, response, and error contract | API — COMPLETE |
 | 5.6 | `IdempotencyKey` value object: canonical expiry behavior, `isSameRequest()`, `isExpired()` | Domain — COMPLETE |
-| 5.7 | Integration test: 5 retries with same key → 1 `orders` row, 1 `order_outbox` row | Test |
+| 5.7 | Integration test: 5 retries with same key → 1 `orders` row, 1 `order_outbox` row | Test — COMPLETE |
 
-**Next sequential task:** 5.7 — retry integration proof. Task 5.6 adds only the
-canonical framework-free `IdempotencyKey` value object and focused tests; it
-does not wire the type into Task 5.5 API, application, or persistence paths.
+**Verified Task 5.7 status (2026-09-29):** One initial request plus five
+same-key retries return the original byte-equivalent `202` response and leave
+one `orders`, one `order_outbox`, and one `idempotency_keys` row. The test-only
+slice adds no production behavior and does not wire Task 5.6 into Task 5.5.
+
+**Next sequential task:** Week 6 Kafka publication/consumption.
 
 ### Task 5.5 frozen contract (documentation-only, 2026-09-25)
 

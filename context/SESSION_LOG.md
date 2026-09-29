@@ -3429,3 +3429,40 @@ Full repository:             404 passed, 0 failed, 0 errors, 0 skipped
 
 - Week 5 / Build Plan task 5.7 — prove five same-key retries produce one Order
   row and one Outbox row.
+
+## SESSION-024
+**Date:** 2026-09-29
+**Milestone:** Week 5, Slice 7 — Build Plan task 5.7
+**Outcome:** COMPLETE — implemented and verified; not staged or committed
+**Engineer:** Tarun K Y
+**Implementation commit:** None
+
+---
+
+### Implemented scope
+
+- Added one PostgreSQL/Testcontainers integration test to the existing Task 5.5
+  endpoint suite.
+- Sent one initial `POST /api/v1/orders` request followed by five retries with
+  the same user, UUID-v4 key, and request body.
+- Verified every call returns the same byte-equivalent `202` response and the
+  database contains exactly one `orders`, one `order_outbox`, and one
+  `idempotency_keys` row.
+- Changed no production code, schema, migration, framework wiring, or existing
+  Task 5.5/5.6 contract.
+
+### Verification
+
+```text
+Focused OrderPlacement integration:      7 passed, 0 failed, 0 skipped
+OrderService:                            70 passed, 0 failed, 0 errors, 0 skipped
+InventoryService:                       319 passed, 0 failed, 0 errors, 0 skipped
+SaleService:                             16 passed, 0 failed, 0 errors, 0 skipped
+Full repository:                        405 passed, 0 failed, 0 errors, 0 skipped
+```
+
+- Verification used the documented transient Docker 29 test-process option
+  `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`; repository configuration was not
+  changed.
+- Kafka, publisher/poller/retry/DLQ behavior, reservation validation, and all
+  Week 6 functionality remain out of scope.

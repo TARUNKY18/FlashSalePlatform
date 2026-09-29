@@ -4,7 +4,7 @@
 
 > **Implementation status warning (updated 2026-09-25):** Broad historical
 > implementation-status fields in this document remain stale. The verified
-> Slice 6 and Week 5 Slices 1–6 facts below have been reconciled; for complete current implementation
+> Slice 6 and Week 5 Slices 1–7 facts below have been reconciled; for complete current implementation
 > truth, see `HANDOFF.md` and `context/CURRENT_STATE.md`. The architecture, ADR,
 > and design sections remain authoritative. Do not copy any unreconciled
 > "PLANNED — no code" field into implementation decisions.
@@ -134,7 +134,7 @@ Unresolved documentation conflicts are never explained or resolved in this docum
 | Observability | Micrometer, Prometheus, OpenTelemetry, Tempo | `/actuator/prometheus`, 100%/10% trace sampling | PLANNED — no metrics or tracing code written |
 | Load testing | Gatling or k6 | 50,000 concurrent user simulation | PLANNED — no simulation files written |
 | Property-based testing | jqwik 1.9.0 | Applied to Product stock domain model | VERIFIED — 5 properties × 1,000 generated examples in InventoryService; test-only classpath |
-| Integration testing | Testcontainers | Real Postgres/Redis/Kafka in tests | VERIFIED — InventoryService uses PostgreSQL 16.3, Redis 7.2, and a Kafka 3.7-compatible broker; Slice 5 includes real same-endpoint Kafka outage/recovery coverage, test-only Slice 6 proves the 1500-request/1000-unit reservation invariant through MockMvc, and all 10 Task 5.3/5.4 OrderService PostgreSQL tests passed in a Docker-backed run |
+| Integration testing | Testcontainers | Real Postgres/Redis/Kafka in tests | VERIFIED — InventoryService uses PostgreSQL 16.3, Redis 7.2, and a Kafka 3.7-compatible broker; Slice 5 includes real same-endpoint Kafka outage/recovery coverage, test-only Slice 6 proves the 1500-request/1000-unit reservation invariant through MockMvc, and all 17 OrderService PostgreSQL tests passed in the Task 5.7 Docker-backed run |
 | Migrations | Flyway | — | VERIFIED — V1 in SaleService (`flash_sales`, `sale_schedules`, `sale_status_history`); InventoryService V1 (`products`, `stock_levels`), V2 (`reservations`, `stock_reservation_log`), V3 (`idempotency_key NOT NULL`), V4 (`inventory_outbox`); OrderService V1 (`idempotency_keys`) and V2 (`orders`, `order_outbox`) |
 
 **Package structure:** `com.flashsale.sale`, `com.flashsale.inventory`, and
@@ -149,14 +149,14 @@ NotificationService and AnalyticsService packages remain planned.
 ## Services
 
 **Status:** SaleService and InventoryService are complete through their current
-milestones. OrderService is complete through Week 5 Slice 4. NotificationService
+milestones. OrderService is complete through Week 5 Slice 7. NotificationService
 and AnalyticsService remain planned.
 
 | Service | Owns | DB / Schema | Kafka Role | Redis Role | Port | Code Status |
 |---|---|---|---|---|---|---|
 | SaleService | Sale lifecycle, scheduling, status machine | `sales_db` | Producer: `sale-events` | Cache: active sale metadata | 8081 | COMPLETE — Week 2; FlashSale aggregate, REST API, Flyway V1, 16 tests |
 | InventoryService | Stock levels, atomic decrement, pre-warm, reservations | `inventory_db` | Producer: `inventory-events` | Layer 1: stock counter (Lua DECR), pre-warm | 8082 | COMPLETE through Week 4 — Slices 1–6 complete; 70 production Java files, 319 tests, latest implementation commit `8a60df7` |
-| OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PARTIAL — Slices 1–6 implemented; orders API and canonical `IdempotencyKey` exist; no messaging yet |
+| OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PARTIAL — Slices 1–7 implemented; retry acceptance is proven; no messaging yet |
 | NotificationService | Email, push, SMS fan-out | None (stateless) | Consumer: all three topics | None | 8084 | PLANNED — zero code written |
 | AnalyticsService | Event ingestion, metrics, dashboards | ClickHouse | Consumer: all three topics | None | 8085 | PLANNED — zero code written |
 
@@ -562,15 +562,14 @@ Week 1 (infrastructure foundation) is partially verified: Postgres, ClickHouse, 
 | 9 | Observability | AnalyticsService batch-writes to ClickHouse; Prometheus metrics; traceId propagation |
 | 10 | Production Readiness | Helm charts + HPA; Gatling load test at 50k users |
 
-**Current status:** Week 5 is in progress. Build Plan tasks 5.1–5.5 are complete;
-Task 5.5 is committed at `5f5a582`. Task 5.6 is implemented and verified in
-the working tree but is not staged or committed. The repository regression
-passed 404 tests with no failures, errors, or skips.
+**Current status:** Week 5 implementation is complete through Build Plan task
+5.7. Task 5.6 is committed at `f0a039a`; Task 5.7 is implemented and verified
+in the working tree but is not staged or committed. The repository regression
+passed 405 tests with no failures, errors, or skips.
 
-**Immediate next task:** Week 5 / Build Plan task 5.7 — prove five same-key
-retries create one Order and one Outbox row. Task 5.6's framework-free
-`IdempotencyKey` value object is implemented and repository-wide verified; its
-integration into existing Task 5.5 paths was not authorized.
+**Immediate next task:** Week 6 Kafka publication/consumption. Task 5.7 changed
+only the existing Order placement integration test; Task 5.6's framework-free
+`IdempotencyKey` remains intentionally unwired from Task 5.5 paths.
 
 ---
 

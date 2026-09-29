@@ -103,6 +103,24 @@ class OrderPlacementIntegrationTest {
     }
 
     @Test
+    void fiveRetriesCreateOneOrderAndOneOutboxRow() throws Exception {
+        String body = request(USER_ID, SALE_ID, RESERVATION_ID);
+        String response = perform("123e4567-e89b-42d3-a456-426614174000", body)
+                .andExpect(status().isAccepted())
+                .andReturn().getResponse().getContentAsString();
+
+        for (int retry = 0; retry < 5; retry++) {
+            perform("123e4567-e89b-42d3-a456-426614174000", body)
+                    .andExpect(status().isAccepted())
+                    .andExpect(content().string(response));
+        }
+
+        assertEquals(1, count("orders"));
+        assertEquals(1, count("order_outbox"));
+        assertEquals(1, count("idempotency_keys"));
+    }
+
+    @Test
     void redisFailureFallsBackToPostgres() throws Exception {
         when(cache.find(any(UserId.class), eq("redis-down"))).thenThrow(
                 new IdempotencyCacheUnavailableException(

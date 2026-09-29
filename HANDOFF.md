@@ -3,7 +3,7 @@
 **Handoff date:** 2026-09-29
 
 **Current milestone:** Week 5 — OrderService (implementation complete through
-Slice 6 / Build Plan task 5.6; working tree uncommitted)
+Slice 7 / Build Plan task 5.7; working tree uncommitted)
 
 **Week 3 status:** COMPLETE — all implementation slices committed; documentation reconciled
 
@@ -29,20 +29,22 @@ Slice 6 / Build Plan task 5.6; working tree uncommitted)
 
 **Week 5, Slice 5 status:** COMPLETE — frozen `POST /api/v1/orders` contract, response persistence/replay, crash/concurrency recovery, structured errors, and 18 new tests; committed `5f5a582`
 
-**Week 5, Slice 6 status:** IMPLEMENTED AND VERIFIED; UNCOMMITTED — canonical framework-free `IdempotencyKey` value object and 6 focused tests; 69/69 OrderService and 404/404 repository tests passed
+**Week 5, Slice 6 status:** COMPLETE — canonical framework-free `IdempotencyKey` value object and 6 focused tests; committed `f0a039a`
+
+**Week 5, Slice 7 status:** IMPLEMENTED AND VERIFIED; UNCOMMITTED — one initial order request plus five same-key retries leave one Order and one Outbox row; 70/70 OrderService and 405/405 repository tests passed
 
 **Branch:** `main`
 
-**Latest commit:** `5f5a582fbee3e55f8ae0e619693bc8834abb0b02` (`Implemented 5.5`); local `main` and `origin/main` both resolve to this commit.
+**Latest commit:** `f0a039aff926e34981ac267d044782fc24904f9e` (`Implemented task 5.6`); local `main` and `origin/main` both resolve to this commit.
 
-**Working tree at Task 5.5 contract-freeze start:** no tracked changes; pre-existing untracked `services/inventory-service/bin/` and `services/sale-service/bin/` directories were left untouched.
+**Working tree at Task 5.7 start:** clean at `f0a039a`; existing ignored `bin/` trees were left untouched.
 
-**Audience:** The senior engineer reviewing Task 5.6 or preparing Week 5 / Build Plan task 5.7
+**Audience:** The senior engineer reviewing Task 5.7 or preparing Week 6
 
 Week 3 and Week 4 are complete. Week 4 Slices 1–6 remain complete and verified.
-Week 5 Slices 1–5 are committed and complete. Slice 6 / Task 5.6 is implemented
-and verified but uncommitted. The full repository verification passed 404 tests
-with no failures, errors, or skips, including 69 OrderService tests.
+Week 5 Slices 1–6 are committed and complete. Slice 7 / Task 5.7 is implemented
+and verified but uncommitted. The full repository verification passed 405 tests
+with no failures, errors, or skips, including 70 OrderService tests.
 
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
@@ -1642,13 +1644,14 @@ No Week 4 implementation slices remain.
 | Slice 3: PostgreSQL-authoritative dual-layer idempotency (task 5.3) | ✔ DONE | `f9a5e3b` |
 | Slice 4: Atomic Order + Outbox persistence (task 5.4) | ✔ DONE | `cb2081f` |
 | Slice 5: `POST /api/v1/orders` (task 5.5) | ✔ DONE | `5f5a582`; SESSION-022 |
-| Slice 6: `IdempotencyKey` value object (task 5.6) | ✔ DONE; UNCOMMITTED | SESSION-023 |
+| Slice 6: `IdempotencyKey` value object (task 5.6) | ✔ DONE | `f0a039a`; SESSION-023 |
+| Slice 7: five-retry acceptance proof (task 5.7) | ✔ DONE; UNCOMMITTED | SESSION-024 |
 
-Task 5.6 is implemented and verified in the working tree but is not staged or
-committed. It does not modify or wire into Task 5.5 behavior.
+Task 5.7 adds only an integration test to the existing Task 5.5 flow. It does
+not modify production code or wire Task 5.6 into Task 5.5 behavior.
 
-**Next sequential task:** Week 5 / Build Plan task 5.7 — retry acceptance
-proof. Week 6 Kafka publication/consumption remains out of scope.
+**Next sequential task:** Week 6 Kafka publication/consumption. It remains out
+of scope for Task 5.7.
 
 ---
 
