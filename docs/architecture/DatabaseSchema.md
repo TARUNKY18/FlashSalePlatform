@@ -374,8 +374,9 @@ idx_order_outbox_order_id     ON (order_id)
 -- Deduplication: covered by UNIQUE constraint on event_id
 ```
 
-The unpublished partial index, polling query, locking, and retry columns are deferred
-to Week 6.
+Task 6.1 implements the polling query and locking against this schema. A partial
+unpublished index and retry-metadata columns remain deferred until an explicit
+later contract requires them.
 
 ---
 
@@ -680,14 +681,10 @@ COMMIT;
 -- written without the outbox event. Atomicity is guaranteed by Postgres.
 ```
 
-**QP-012 — Week 6 planned outbox poller: fetch and publish batch**
-
-This future query requires a later migration for its polling index and retry columns;
-it is not part of the Task 5.4 schema.
+**QP-012 — Task 6.1 outbox poller: fetch and publish batch**
 ```sql
 -- Runs every 500ms, processes up to 100 rows
-SELECT id, order_id, event_id, event_type, event_version,
-       aggregate_id, aggregate_type, payload, attempt_count
+SELECT *
 FROM   order_outbox
 WHERE  published = FALSE
 ORDER  BY created_at ASC
@@ -695,14 +692,12 @@ LIMIT  100
 FOR UPDATE SKIP LOCKED;        -- concurrent-safe across multiple OrderService pods
 ```
 
-**QP-013 — Week 6 planned outbox poller: mark as published**
+**QP-013 — Task 6.1 outbox poller: mark after Kafka acknowledgement**
 ```sql
 UPDATE order_outbox
 SET    published        = TRUE,
-       published_at     = NOW(),
-       attempt_count    = attempt_count + 1,
-       last_attempted_at = NOW()
-WHERE  id = ANY($1::uuid[]);   -- batch update, array of IDs from QP-012
+       published_at     = NOW()
+WHERE  id = $1;                 -- applied to each acknowledged row in the transaction
 ```
 
 **QP-014 — Buyer: order history**

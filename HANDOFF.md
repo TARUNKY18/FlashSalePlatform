@@ -1,9 +1,9 @@
 # Flash Sale Platform — Engineering Handoff
 
-**Handoff date:** 2026-09-29
+**Handoff date:** 2026-09-30
 
-**Current milestone:** Week 5 — OrderService (implementation complete through
-Slice 7 / Build Plan task 5.7; working tree uncommitted)
+**Current milestone:** Week 6 — Kafka Wiring (Task 6.1 implementation and
+automated verification complete; literal three-pod check pending)
 
 **Week 3 status:** COMPLETE — all implementation slices committed; documentation reconciled
 
@@ -31,20 +31,24 @@ Slice 7 / Build Plan task 5.7; working tree uncommitted)
 
 **Week 5, Slice 6 status:** COMPLETE — canonical framework-free `IdempotencyKey` value object and 6 focused tests; committed `f0a039a`
 
-**Week 5, Slice 7 status:** IMPLEMENTED AND VERIFIED; UNCOMMITTED — one initial order request plus five same-key retries leave one Order and one Outbox row; 70/70 OrderService and 405/405 repository tests passed
+**Week 5, Slice 7 status:** COMPLETE — one initial order request plus five same-key retries leave one Order and one Outbox row; committed `e15d5f1`
+
+**Week 6, Task 6.1 status:** IMPLEMENTED AND AUTOMATED-VERIFIED; THREE-POD CHECK PENDING — OrderService publishes acknowledged batches of up to 100 durable outbox rows to `order-events`; 79/79 OrderService and 414/414 repository tests passed
 
 **Branch:** `main`
 
-**Latest commit:** `f0a039aff926e34981ac267d044782fc24904f9e` (`Implemented task 5.6`); local `main` and `origin/main` both resolve to this commit.
+**Baseline before the Task 6.1 closeout commit:** `e15d5f19712eec4bc677f8fce89cedf79618e7b9` (`Verify Task 5.7 idempotent order placement`); local `main` and `origin/main` both resolved to this commit.
 
-**Working tree at Task 5.7 start:** clean at `f0a039a`; existing ignored `bin/` trees were left untouched.
+**Working tree at Task 6.1 start:** clean at `e15d5f1`; existing ignored `bin/` trees were left untouched.
 
-**Audience:** The senior engineer reviewing Task 5.7 or preparing Week 6
+**Audience:** The senior engineer reviewing Task 6.1 or preparing Task 6.2
 
 Week 3 and Week 4 are complete. Week 4 Slices 1–6 remain complete and verified.
-Week 5 Slices 1–6 are committed and complete. Slice 7 / Task 5.7 is implemented
-and verified but uncommitted. The full repository verification passed 405 tests
-with no failures, errors, or skips, including 70 OrderService tests.
+Week 5 Slices 1–7 are committed and complete. Week 6 Task 6.1 implementation
+and automated verification are complete. The full repository verification
+passed 414 tests with no failures, errors, or skips, including 79 OrderService
+tests. The literal three-pod operational check remains pending because service
+deployment infrastructure is planned for Week 10 and does not yet exist.
 
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
@@ -1645,13 +1649,13 @@ No Week 4 implementation slices remain.
 | Slice 4: Atomic Order + Outbox persistence (task 5.4) | ✔ DONE | `cb2081f` |
 | Slice 5: `POST /api/v1/orders` (task 5.5) | ✔ DONE | `5f5a582`; SESSION-022 |
 | Slice 6: `IdempotencyKey` value object (task 5.6) | ✔ DONE | `f0a039a`; SESSION-023 |
-| Slice 7: five-retry acceptance proof (task 5.7) | ✔ DONE; UNCOMMITTED | SESSION-024 |
+| Slice 7: five-retry acceptance proof (task 5.7) | ✔ DONE | `e15d5f1`; SESSION-024 |
 
 Task 5.7 adds only an integration test to the existing Task 5.5 flow. It does
 not modify production code or wire Task 5.6 into Task 5.5 behavior.
 
-**Next sequential task:** Week 6 Kafka publication/consumption. It remains out
-of scope for Task 5.7.
+**Next sequential task:** Week 6 / Build Plan task 6.2 — Kafka topic
+configuration. Tasks 6.3–6.7 remain out of scope.
 
 ---
 

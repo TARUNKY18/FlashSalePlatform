@@ -3466,3 +3466,58 @@ Full repository:                        405 passed, 0 failed, 0 errors, 0 skippe
   changed.
 - Kafka, publisher/poller/retry/DLQ behavior, reservation validation, and all
   Week 6 functionality remain out of scope.
+
+## SESSION-025
+**Date:** 2026-09-30
+**Milestone:** Week 6 — Build Plan task 6.1
+**Outcome:** IMPLEMENTED AND AUTOMATED-VERIFIED — final audit complete; three-pod check pending
+**Engineer:** Tarun K Y
+**Implementation commit:** This Task 6.1 closeout commit
+
+---
+
+### Implemented scope
+
+- Added the OrderService outbox poller on a configurable 500 ms default
+  interval under the existing `infrastructure` profile.
+- Selects up to 100 oldest unpublished rows with `FOR UPDATE SKIP LOCKED`,
+  publishes their exact persisted envelopes to `order-events` keyed by
+  `saleId`, waits for Kafka acknowledgements, then sets `published=true` and
+  `published_at` in the same PostgreSQL transaction.
+- Failed batches remain unpublished for the next poll. Stable `eventId`
+  provides at-least-once delivery; no Kafka transaction was introduced.
+- Added no topic creation, consumer, ACL, retry metadata, DLQ, or later-task
+  behavior.
+
+### Verification
+
+```text
+Focused Task 6.1 tests:  9 passed, 0 failed, 0 errors, 0 skipped
+OrderService:           79 passed, 0 failed, 0 errors, 0 skipped
+InventoryService:      319 passed, 0 failed, 0 errors, 0 skipped
+SaleService:            16 passed, 0 failed, 0 errors, 0 skipped
+Full repository:       414 passed, 0 failed, 0 errors, 0 skipped
+```
+
+- Focused coverage includes publisher unit paths plus real PostgreSQL/Kafka
+  publication, the 100-row batch cap, and three concurrent poller calls with
+  no duplicate normal publication. The final audit added explicit
+  acknowledgement-before-marking and stable-event-ID retry checks.
+- Verification used transient `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`; repository
+  configuration was not changed.
+- The literal three-pod operational check is a Week 6 Definition-of-Done item
+  and remains unverified. The repository contains only infrastructure Docker
+  Compose; service Dockerfiles and Helm/Kubernetes deployment are Week 10 work,
+  so no speculative deployment infrastructure was created.
+
+### Preserved boundaries
+
+- Tasks 5.5, 5.6, and 5.7 remain unchanged.
+- Task 6.2 topic creation, Tasks 6.3–6.7, retry/DLQ metadata, and all existing
+  `bin/` trees remain untouched.
+
+### Next sequential task
+
+- Week 6 / Build Plan task 6.2 — configure the remaining `sale-events` and
+  `order-events` topics without duplicating InventoryService ownership of
+  `inventory-events`.

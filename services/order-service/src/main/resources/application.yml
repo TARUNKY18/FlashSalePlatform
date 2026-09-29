@@ -60,3 +60,16 @@ spring:
       password: ${REDIS_PASSWORD:redis_dev}
       cluster:
         nodes: ${SPRING_DATA_REDIS_CLUSTER_NODES:localhost:7001,localhost:7002,localhost:7003}
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+
+order:
+  outbox:
+    poll-interval-ms: ${ORDER_OUTBOX_POLL_INTERVAL_MS:500}

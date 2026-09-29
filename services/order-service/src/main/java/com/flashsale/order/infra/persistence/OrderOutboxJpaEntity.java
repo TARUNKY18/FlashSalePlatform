@@ -83,6 +83,11 @@ public class OrderOutboxJpaEntity {
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
     }
 
+    public void markPublished(Instant at) {
+        published = true;
+        publishedAt = Objects.requireNonNull(at, "at must not be null");
+    }
+
     public UUID getId() { return id; }
     public UUID getOrderId() { return orderId; }
     public UUID getEventId() { return eventId; }

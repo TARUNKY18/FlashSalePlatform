@@ -1034,6 +1034,9 @@ public class NotificationEventConsumer {
 
 ### Outbox poller — OrderService
 
+Task 6.1 implements only persisted `OrderCreated` publication. The additional
+event types in broader architecture examples remain future work.
+
 ```java
 @Component
 @RequiredArgsConstructor
@@ -1059,15 +1062,10 @@ public class OutboxPoller {
         // Wait for all sends — fail fast on any error
         try {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(10, SECONDS);
-            // Mark all as published in a single batch UPDATE
-            outboxRepository.markPublished(
-                unpublished.stream().map(OutboxEvent::id).toList()
-            );
+            unpublished.forEach(event -> event.markPublished(Instant.now()));
+            outboxRepository.saveAllAndFlush(unpublished);
         } catch (Exception e) {
             log.error("Outbox publish failed, will retry on next poll: {}", e.getMessage());
-            outboxRepository.recordAttempt(
-                unpublished.stream().map(OutboxEvent::id).toList(), e.getMessage()
-            );
             // Do NOT re-throw — let the next scheduled poll retry
         }
     }

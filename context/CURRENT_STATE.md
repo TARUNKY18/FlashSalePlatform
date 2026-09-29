@@ -1,7 +1,7 @@
 # CURRENT_STATE.md
-**Milestone:** Week 5 — OrderService (implementation complete through Slice 7 / task 5.7)
-**Status:** 🟢 TASK 5.7 IMPLEMENTED AND VERIFIED; UNCOMMITTED
-**Date:** 2026-09-29
+**Milestone:** Week 6 — Kafka Wiring (implementation complete through task 6.1)
+**Status:** 🟡 TASK 6.1 IMPLEMENTED AND AUTOMATED-VERIFIED; THREE-POD CHECK PENDING
+**Date:** 2026-09-30
 **Engineer:** Tarun K Y
 
 ---
@@ -11,12 +11,12 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `f0a039a` — `Implemented task 5.6`; local `main` and `origin/main` match |
-| Implementation commit status | Task 5.7 changes are not staged or committed |
-| Build | Full repository `test --rerun-tasks` passed with Docker: 405 passed, 0 failed, 0 errors, 0 skipped |
-| Production Java files | 135 total: InventoryService 70, SaleService 30, OrderService 35 |
-| Test classes | 56 total; OrderService has 13 test classes |
-| OrderService tests | 70 passed, 0 failed, 0 errors, 0 skipped |
+| Baseline before Task 6.1 closeout | `e15d5f1` — `Verify Task 5.7 idempotent order placement`; local `main` and `origin/main` matched |
+| Implementation commit status | Included in the Task 6.1 closeout commit |
+| Build | Full repository `test --rerun-tasks` passed with Docker: 414 passed, 0 failed, 0 errors, 0 skipped |
+| Production Java files | 136 total: InventoryService 70, SaleService 30, OrderService 36 |
+| Test classes | 58 total; OrderService has 15 test classes |
+| OrderService tests | 79 passed, 0 failed, 0 errors, 0 skipped |
 | Inventory / SaleService regression | 319 InventoryService and 16 SaleService tests passed; neither service's source or tests changed |
 
 ---
@@ -51,22 +51,22 @@
 | ✔ Order Persistence + Transactional Outbox (committed `cb2081f`) | Week 5 Slice 4 / task 5.4; `Order.place(...)` creates one Order-owned `OrderCreated` event; `orders` and `order_outbox` persist atomically; stable IDs, canonical envelope/payload, restrictive FK, composite order uniqueness, unique reservation, unpublished initial outbox state; 10 PostgreSQL/Testcontainers tests passed across tasks 5.3/5.4 |
 | ✔ Orders API (committed `5f5a582`) | Week 5 Slice 5 / task 5.5; `POST /api/v1/orders`; five-field validated body and exact `Idempotency-Key`; canonical byte-equivalent `202` response persistence/replay; crash-gap and concurrent same-key recovery through additive Order lookup; proven duplicate reservation `409`; frozen `400`/`500` errors; no migration or Task 5.4 transaction change; 18 new tests |
 | ✔ IdempotencyKey Value Object (committed `f0a039a`) | Week 5 Slice 6 / task 5.6; framework-free UUID-v4 string record; null/blank/malformed/non-v4 rejection; record equality and hash code; `isSameRequest()`; fixed 24-hour `expiresAt()` and strict-after `isExpired()` boundary; 6 focused tests; no Task 5.5 wiring |
-| ✔ Order Retry Acceptance Proof (working tree; uncommitted) | Week 5 Slice 7 / task 5.7; one initial `POST /api/v1/orders` plus five same-key retries return byte-equivalent `202` responses and leave one `orders`, one `order_outbox`, and one `idempotency_keys` row; test-only change |
+| ✔ Order Retry Acceptance Proof (committed `e15d5f1`) | Week 5 Slice 7 / task 5.7; one initial `POST /api/v1/orders` plus five same-key retries return byte-equivalent `202` responses and leave one `orders`, one `order_outbox`, and one `idempotency_keys` row; test-only change |
+| ✔ Order Outbox Publisher (working tree; uncommitted) | Week 6 task 6.1; configurable 500 ms poller; oldest 100 unpublished rows locked with `FOR UPDATE SKIP LOCKED`; exact stored envelopes published to `order-events` by `saleId`; rows marked published only after acknowledgement; failed batches retained for retry |
 
 ---
 
 ## Verification
 
 ```text
-Focused OrderPlacement integration:       7 passed, 0 failed, 0 skipped
-OrderService total:                      70 passed, 0 failed, 0 skipped
-OrderService PostgreSQL/Testcontainers:  17 passed, 0 failed, 0 skipped
-Full repository:                         405 passed, 0 failed, 0 errors, 0 skipped
-Task 5.7 final verification:              PASS
+Focused Task 6.1 publisher tests:          9 passed, 0 failed, 0 skipped
+OrderService total:                      79 passed, 0 failed, 0 skipped
+Full repository:                        414 passed, 0 failed, 0 errors, 0 skipped
+Task 6.1 source/integration verification: PASS
 ```
 
-Docker/Testcontainers successfully started and executed all 17 PostgreSQL
-integration tests; none were skipped for Docker availability. With the local
+Docker/Testcontainers successfully executed every PostgreSQL/Kafka integration
+test; none were skipped for Docker availability. With the local
 Docker Engine 29 environment, Testcontainers 1.19.8 required the transient
 test-process option `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`; repository
 configuration was not changed.
@@ -233,9 +233,12 @@ Week 5 Slice 5 / Build Plan task 5.5 is **COMPLETE** at `5f5a582`.
 
 Week 5 Slice 6 / Build Plan task 5.6 is **COMPLETE** at `f0a039a`.
 
-Week 5 Slice 7 / Build Plan task 5.7 is **IMPLEMENTED AND VERIFIED; UNCOMMITTED**.
-All 70 OrderService tests and the 405-test repository regression passed with no
-failures, errors, or skips. Existing Task 5.5 and Task 5.6 behavior remains unchanged.
+Week 5 Slice 7 / Build Plan task 5.7 is **COMPLETE** at `e15d5f1`.
 
-**Next sequential task:** Week 6 Kafka publication/consumption; it remains out
-of scope for the completed Task 5.7 slice.
+Week 6 / Build Plan task 6.1 is **IMPLEMENTED AND AUTOMATED-VERIFIED**. All 79
+OrderService tests and the 414-test repository regression passed with no
+failures, errors, or skips. Tasks 5.5, 5.6, and 5.7 remain unchanged. The
+literal three-pod check remains pending because the repository has no service
+Dockerfile, Helm chart, or Kubernetes deployment; those are Week 10 work.
+
+**Next sequential task:** Week 6 / Build Plan task 6.2 — Kafka topic configuration.

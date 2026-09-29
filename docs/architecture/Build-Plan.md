@@ -334,7 +334,8 @@ same-key retries return the original byte-equivalent `202` response and leave
 one `orders`, one `order_outbox`, and one `idempotency_keys` row. The test-only
 slice adds no production behavior and does not wire Task 5.6 into Task 5.5.
 
-**Next sequential task:** Week 6 Kafka publication/consumption.
+**Next sequential task:** Week 6 / task 6.2 — Kafka topic configuration. Task
+6.1 is implemented and verified in the working tree.
 
 ### Task 5.5 frozen contract (documentation-only, 2026-09-25)
 
@@ -523,13 +524,29 @@ the cross-service end-to-end test remain Week 6 work.
 
 | # | Task | Area |
 |---|---|---|
-| 6.1 | Outbox poller: `@Scheduled` 500ms, `SELECT FOR UPDATE SKIP LOCKED LIMIT 100`, batch publish | Kafka |
+| 6.1 | Outbox poller: `@Scheduled` 500ms, `SELECT FOR UPDATE SKIP LOCKED LIMIT 100`, batch publish | Kafka — IMPLEMENTED; AUTOMATED PASS; 3-POD CHECK PENDING |
 | 6.2 | `KafkaTopicConfig`: `sale-events` (8p), `inventory-events` (16p), `order-events` (8p) | Kafka |
 | 6.3 | `InventoryEventConsumer` in OrderService: routes `StockReserved` → `processReservationConfirmed()` | Kafka |
 | 6.4 | `InventoryEventTranslator` ACL: maps `StockReservedPayload` → `PurchaseIntent` (no InventoryService type imports in OrderService) | ACL |
 | 6.5 | `NotificationService` skeleton: `@KafkaListener` on all 3 topics, log events, `enable.auto.commit=false` | Service |
 | 6.6 | All consumers: `enable.auto.commit=false`, manual `Acknowledgment.acknowledge()` after processing | Config |
 | 6.7 | Integration test: POST /reservations → outbox poller fires → `StockReserved` on Kafka → OrderService consumes | Test |
+
+**Audited Task 6.1 status (2026-09-30):** OrderService polls up to 100 oldest
+unpublished rows on a configurable 500 ms default interval with `FOR UPDATE
+SKIP LOCKED`, publishes the exact persisted envelope to `order-events` keyed by
+`saleId`, and marks rows published only after Kafka acknowledgement. Failed
+batches remain unpublished for the next poll. Unit and real PostgreSQL/Kafka
+tests passed, including acknowledgement-before-marking, stable-event-ID retry,
+and three concurrent poller calls with no duplicate normal publication. The
+literal three-pod check is an operational Week 6 Definition-of-Done criterion,
+not a supported repository test: service Dockerfiles and Helm/Kubernetes
+deployment are planned for Week 10. It remains explicitly unverified without
+pulling that infrastructure forward. Task 6.2 and tasks 6.3–6.7 remain deferred.
+
+**Next sequential task:** Task 6.2 — `KafkaTopicConfig` for the remaining
+`sale-events` and `order-events` topics while preserving the existing
+InventoryService-owned `inventory-events` topic.
 
 ### Deliverables
 
