@@ -1,9 +1,9 @@
 # Flash Sale Platform — Engineering Handoff
 
-**Handoff date:** 2026-09-27
+**Handoff date:** 2026-09-29
 
 **Current milestone:** Week 5 — OrderService (implementation complete through
-Slice 5 / Build Plan task 5.5; working tree uncommitted)
+Slice 6 / Build Plan task 5.6; working tree uncommitted)
 
 **Week 3 status:** COMPLETE — all implementation slices committed; documentation reconciled
 
@@ -27,20 +27,22 @@ Slice 5 / Build Plan task 5.5; working tree uncommitted)
 
 **Week 5, Slice 4 status:** COMPLETE — Build Plan task 5.4; Order-owned `OrderCreated`, atomic Order + Outbox persistence, frozen V2 schema, and 10/10 passing Task 5.3/5.4 PostgreSQL/Testcontainers tests; committed `cb2081f`
 
-**Week 5, Slice 5 status:** IMPLEMENTED AND VERIFIED; UNCOMMITTED — frozen `POST /api/v1/orders` contract, response persistence/replay, crash/concurrency recovery, structured errors, and 18 new tests; 63/63 OrderService and 398/398 repository tests passed
+**Week 5, Slice 5 status:** COMPLETE — frozen `POST /api/v1/orders` contract, response persistence/replay, crash/concurrency recovery, structured errors, and 18 new tests; committed `5f5a582`
+
+**Week 5, Slice 6 status:** IMPLEMENTED AND VERIFIED; UNCOMMITTED — canonical framework-free `IdempotencyKey` value object and 6 focused tests; 69/69 OrderService and 404/404 repository tests passed
 
 **Branch:** `main`
 
-**Latest commit:** `ab86ed82761ca503c4ae22ae4b49a4d10c2adcc7` (`feat(docs): updated docs for 5.4 implementation`); local `main` and `origin/main` both resolved to this commit at Task 5.5 contract-freeze start. Task 5.4 implementation remains `cb2081f`.
+**Latest commit:** `5f5a582fbee3e55f8ae0e619693bc8834abb0b02` (`Implemented 5.5`); local `main` and `origin/main` both resolve to this commit.
 
 **Working tree at Task 5.5 contract-freeze start:** no tracked changes; pre-existing untracked `services/inventory-service/bin/` and `services/sale-service/bin/` directories were left untouched.
 
-**Audience:** The senior engineer reviewing Task 5.5 or preparing Week 5 / Build Plan task 5.6
+**Audience:** The senior engineer reviewing Task 5.6 or preparing Week 5 / Build Plan task 5.7
 
 Week 3 and Week 4 are complete. Week 4 Slices 1–6 remain complete and verified.
-Week 5 Slices 1–5 are complete; Task 5.5 remains uncommitted for review. The
-full repository verification passed 398 tests with no failures, errors, or
-skips, including 63 OrderService tests and 16 PostgreSQL/Testcontainers tests.
+Week 5 Slices 1–5 are committed and complete. Slice 6 / Task 5.6 is implemented
+and verified but uncommitted. The full repository verification passed 404 tests
+with no failures, errors, or skips, including 69 OrderService tests.
 
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
@@ -1639,14 +1641,14 @@ No Week 4 implementation slices remain.
 | Slice 2: Order aggregate and state machine (task 5.2) | ✔ DONE | `df6d98f`; SESSION-018 |
 | Slice 3: PostgreSQL-authoritative dual-layer idempotency (task 5.3) | ✔ DONE | `f9a5e3b` |
 | Slice 4: Atomic Order + Outbox persistence (task 5.4) | ✔ DONE | `cb2081f` |
-| Slice 5: `POST /api/v1/orders` (task 5.5) | ✔ DONE; UNCOMMITTED | SESSION-022 |
+| Slice 5: `POST /api/v1/orders` (task 5.5) | ✔ DONE | `5f5a582`; SESSION-022 |
+| Slice 6: `IdempotencyKey` value object (task 5.6) | ✔ DONE; UNCOMMITTED | SESSION-023 |
 
-Task 5.5 is implemented and verified in the working tree but has no
-implementation commit.
+Task 5.6 is implemented and verified in the working tree but is not staged or
+committed. It does not modify or wire into Task 5.5 behavior.
 
-**Next sequential task:** Week 5 / Build Plan task 5.6 — canonical
-`IdempotencyKey` value-object behavior. Task 5.7 retry acceptance behavior and
-Week 6 Kafka publication/consumption remain out of scope.
+**Next sequential task:** Week 5 / Build Plan task 5.7 — retry acceptance
+proof. Week 6 Kafka publication/consumption remains out of scope.
 
 ---
 

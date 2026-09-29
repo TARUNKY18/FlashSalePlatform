@@ -1,7 +1,7 @@
 # CURRENT_STATE.md
-**Milestone:** Week 5 — OrderService (implementation complete through Slice 5 / task 5.5)
-**Status:** 🟢 TASK 5.5 IMPLEMENTED AND VERIFIED; UNCOMMITTED
-**Date:** 2026-09-27
+**Milestone:** Week 5 — OrderService (implementation complete through Slice 6 / task 5.6)
+**Status:** 🟢 TASK 5.6 IMPLEMENTED AND VERIFIED; UNCOMMITTED
+**Date:** 2026-09-29
 **Engineer:** Tarun K Y
 
 ---
@@ -11,12 +11,12 @@
 | Item | Verified state |
 |---|---|
 | Branch | `main` |
-| Latest commit | `ab86ed8` — `feat(docs): updated docs for 5.4 implementation`; Task 5.4 implementation is `cb2081f` |
-| Implementation commit status | Task 5.5 is implemented and verified in the working tree; not staged or committed. Local `main` and `origin/main` remain at `ab86ed8`; Task 5.4 remains committed at `cb2081f` |
-| Build | Full repository `test --rerun-tasks` passed with Docker: 398 passed, 0 failed, 0 errors, 0 skipped |
-| Production Java files | 134 total: InventoryService 70, SaleService 30, OrderService 34 |
-| Test classes | 55 total; OrderService has 12 test classes |
-| OrderService tests | 63 passed, 0 failed, 0 errors, 0 skipped (47 non-container + 16 PostgreSQL/Testcontainers) |
+| Latest commit | `5f5a582` — `Implemented 5.5`; local `main` and `origin/main` match |
+| Implementation commit status | Task 5.6 is implemented in two untracked OrderService files; not staged or committed |
+| Build | Full repository `test --rerun-tasks` passed with Docker: 404 passed, 0 failed, 0 errors, 0 skipped |
+| Production Java files | 135 total: InventoryService 70, SaleService 30, OrderService 35 |
+| Test classes | 56 total; OrderService has 13 test classes |
+| OrderService tests | 69 passed, 0 failed, 0 errors, 0 skipped |
 | Inventory / SaleService regression | 319 InventoryService and 16 SaleService tests passed; neither service's source or tests changed |
 
 ---
@@ -49,17 +49,18 @@
 | ✔ Order Aggregate (SESSION-018, committed `df6d98f`) | Week 5 Slice 2 / task 5.2; framework-free in-memory `Order`; `place(...)` creates version-0 `PENDING`; Order-owned `PurchaseIntentId`; typed `OrderId`/`UserId`/`SaleId`; positive-only `Money`; opaque nonblank string idempotency key; explicit `Instant` creation/transition times; manual `confirm`/`cancel`/`expire`; terminal-state enforcement; 11 focused tests |
 | ✔ Order Idempotency (committed `f9a5e3b`) | Week 5 Slice 3 / task 5.3; PostgreSQL-authoritative `(user_id, idempotency_key)` durable record; best-effort 24-hour Redis cache and re-warming; default no-infrastructure bootstrap preserved; 5 PostgreSQL/Testcontainers tests passed |
 | ✔ Order Persistence + Transactional Outbox (committed `cb2081f`) | Week 5 Slice 4 / task 5.4; `Order.place(...)` creates one Order-owned `OrderCreated` event; `orders` and `order_outbox` persist atomically; stable IDs, canonical envelope/payload, restrictive FK, composite order uniqueness, unique reservation, unpublished initial outbox state; 10 PostgreSQL/Testcontainers tests passed across tasks 5.3/5.4 |
-| ✔ Orders API (working tree; uncommitted) | Week 5 Slice 5 / task 5.5; `POST /api/v1/orders`; five-field validated body and exact `Idempotency-Key`; canonical byte-equivalent `202` response persistence/replay; crash-gap and concurrent same-key recovery through additive Order lookup; proven duplicate reservation `409`; frozen `400`/`500` errors; no migration or Task 5.4 transaction change; 18 new tests |
+| ✔ Orders API (committed `5f5a582`) | Week 5 Slice 5 / task 5.5; `POST /api/v1/orders`; five-field validated body and exact `Idempotency-Key`; canonical byte-equivalent `202` response persistence/replay; crash-gap and concurrent same-key recovery through additive Order lookup; proven duplicate reservation `409`; frozen `400`/`500` errors; no migration or Task 5.4 transaction change; 18 new tests |
+| ✔ IdempotencyKey Value Object (working tree; uncommitted) | Week 5 Slice 6 / task 5.6; framework-free UUID-v4 string record; null/blank/malformed/non-v4 rejection; record equality and hash code; `isSameRequest()`; fixed 24-hour `expiresAt()` and strict-after `isExpired()` boundary; 6 focused tests; no Task 5.5 wiring |
 
 ---
 
 ## Verification
 
 ```text
-OrderService non-container:              47 passed, 0 failed, 0 skipped
+OrderService total:                      69 passed, 0 failed, 0 skipped
 OrderService PostgreSQL/Testcontainers:  16 passed, 0 failed, 0 skipped
-Full repository:                         398 passed, 0 failed, 0 errors, 0 skipped
-Task 5.5 final verification:              PASS
+Full repository:                         404 passed, 0 failed, 0 errors, 0 skipped
+Task 5.6 final verification:              PASS
 ```
 
 Docker/Testcontainers successfully started and executed all 16 PostgreSQL
@@ -226,10 +227,11 @@ Week 5 Slice 3 / Build Plan task 5.3 is **COMPLETE** at `f9a5e3b`.
 
 Week 5 Slice 4 / Build Plan task 5.4 is **COMPLETE** at `cb2081f`.
 
-Week 5 Slice 5 / Build Plan task 5.5 is **IMPLEMENTED AND VERIFIED; UNCOMMITTED**.
-All 63 OrderService tests and the 398-test repository regression passed with no
-failures, errors, or skips. Task 5.4 behavior and migrations remain unchanged.
+Week 5 Slice 5 / Build Plan task 5.5 is **COMPLETE** at `5f5a582`.
 
-**Next sequential task:** Week 5 / Build Plan task 5.6 — canonical
-`IdempotencyKey` value-object behavior. Task 5.7 retry acceptance behavior and
-Week 6 Kafka publication/consumption remain out of scope.
+Week 5 Slice 6 / Build Plan task 5.6 is **IMPLEMENTED AND VERIFIED; UNCOMMITTED**.
+All 69 OrderService tests and the 404-test repository regression passed with no
+failures, errors, or skips. Existing Task 5.5 behavior remains unchanged.
+
+**Next sequential task:** Week 5 / Build Plan task 5.7 — retry acceptance
+proof. Week 6 Kafka publication/consumption remains out of scope.

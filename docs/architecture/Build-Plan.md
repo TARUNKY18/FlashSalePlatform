@@ -326,12 +326,12 @@ passed.
 | 5.3 | `IdempotencyRecord` entity: Redis `idem:{userId}:{key}` check → Postgres `idempotency_keys` fallback | Domain — COMPLETE |
 | 5.4 | `OutboxEvent` entity: written in same `@Transactional` block as `Order` — never separately | Domain — COMPLETE |
 | 5.5 | `POST /api/v1/orders`: frozen request, idempotency/recovery, response, and error contract | API — COMPLETE |
-| 5.6 | `IdempotencyKey` value object: canonical expiry behavior, `isSameRequest()`, `isExpired()` | Domain |
+| 5.6 | `IdempotencyKey` value object: canonical expiry behavior, `isSameRequest()`, `isExpired()` | Domain — COMPLETE |
 | 5.7 | Integration test: 5 retries with same key → 1 `orders` row, 1 `order_outbox` row | Test |
 
-**Next sequential task:** 5.6 — `IdempotencyKey` value object. Task 5.5 is
-implemented and repository-wide verified (398 passed, 0 failed, 0 errors,
-0 skipped); its frozen boundaries remain in force.
+**Next sequential task:** 5.7 — retry integration proof. Task 5.6 adds only the
+canonical framework-free `IdempotencyKey` value object and focused tests; it
+does not wire the type into Task 5.5 API, application, or persistence paths.
 
 ### Task 5.5 frozen contract (documentation-only, 2026-09-25)
 
@@ -482,7 +482,7 @@ implemented and repository-wide verified (398 passed, 0 failed, 0 errors,
 [ ] Crash gap and concurrent same-key loser recover through Order lookup without changing the Order + Outbox transaction
 [ ] Order + OutboxEvent write is atomic: crash test (kill -9 mid-transaction) leaves no partial state
 [x] IdempotencyRecord committed to permanent Postgres first; Redis populated afterward best-effort with TTL 24h
-[ ] IdempotencyKey.isExpired() boundary test: key at 23h59m59s vs 24h00m01s
+[x] IdempotencyKey.isExpired() boundary test: key at 23h59m59s vs 24h00m01s
 ```
 
 ### Interview question unlocked

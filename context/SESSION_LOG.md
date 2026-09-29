@@ -3379,3 +3379,53 @@ Full repository:                        398 passed, 0 failed, 0 errors, 0 skippe
 
 - Review and commit Task 5.5 separately when approved. The next implementation
   slice is Week 5 / Build Plan task 5.6.
+
+## SESSION-023
+**Date:** 2026-09-29
+**Milestone:** Week 5, Slice 6 — Build Plan task 5.6
+**Outcome:** COMPLETE — implemented and verified; not staged or committed
+**Engineer:** Tarun K Y
+**Implementation commit:** None
+
+---
+
+### Implemented scope
+
+- Added the framework-free `IdempotencyKey` Java 21 record in the Order domain.
+- Preserved the key's string representation while requiring a non-null,
+  nonblank, valid UUID v4 value.
+- Added record value equality/hash semantics, `isSameRequest()`, a fixed
+  24-hour `expiresAt()`, and strict-after `isExpired()` behavior. The exact
+  expiry instant is not expired.
+- Added 6 focused unit tests covering valid and invalid construction, equality,
+  hash code, same-request comparison, expiry calculation and boundaries, and
+  null instant handling.
+
+### Verification
+
+```text
+Focused IdempotencyKey tests:  6 passed, 0 failed, 0 skipped
+OrderService:                 69 passed, 0 failed, 0 errors, 0 skipped
+InventoryService:            319 passed, 0 failed, 0 errors, 0 skipped
+SaleService:                  16 passed, 0 failed, 0 errors, 0 skipped
+Full repository:             404 passed, 0 failed, 0 errors, 0 skipped
+```
+
+- The forced repository regression used the already-documented transient
+  Docker 29 test-process option `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`; no
+  repository configuration changed.
+
+### Preserved boundaries
+
+- No existing Task 5.5 production or test file changed. The value object is not
+  wired into API, application, aggregate, persistence, Redis, or serialization
+  paths in this slice.
+- No Kafka, HTTP client, scheduler, migration, schema, transaction,
+  reservation-consumption, retry-proof, or Task 5.7+ behavior was added.
+- The pre-existing untracked InventoryService and SaleService `bin/` trees were
+  not modified by this task.
+
+### Next sequential task
+
+- Week 5 / Build Plan task 5.7 — prove five same-key retries produce one Order
+  row and one Outbox row.

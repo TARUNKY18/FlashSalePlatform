@@ -4,7 +4,7 @@
 
 > **Implementation status warning (updated 2026-09-25):** Broad historical
 > implementation-status fields in this document remain stale. The verified
-> Slice 6 and Week 5 Slices 1–4 facts below have been reconciled; for complete current implementation
+> Slice 6 and Week 5 Slices 1–6 facts below have been reconciled; for complete current implementation
 > truth, see `HANDOFF.md` and `context/CURRENT_STATE.md`. The architecture, ADR,
 > and design sections remain authoritative. Do not copy any unreconciled
 > "PLANNED — no code" field into implementation decisions.
@@ -156,7 +156,7 @@ and AnalyticsService remain planned.
 |---|---|---|---|---|---|---|
 | SaleService | Sale lifecycle, scheduling, status machine | `sales_db` | Producer: `sale-events` | Cache: active sale metadata | 8081 | COMPLETE — Week 2; FlashSale aggregate, REST API, Flyway V1, 16 tests |
 | InventoryService | Stock levels, atomic decrement, pre-warm, reservations | `inventory_db` | Producer: `inventory-events` | Layer 1: stock counter (Lua DECR), pre-warm | 8082 | COMPLETE through Week 4 — Slices 1–6 complete; 70 production Java files, 319 tests, latest implementation commit `8a60df7` |
-| OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PARTIAL — Slices 1–4 complete; bootstrap, Order domain, PostgreSQL-authoritative idempotency, and atomic Order/outbox persistence; no orders API or messaging yet |
+| OrderService | Order lifecycle, idempotency, saga orchestration | `orders_db` | Producer: `order-events`; Consumer: `inventory-events` | Layer 3: idempotency key cache | 8083 | PARTIAL — Slices 1–6 implemented; orders API and canonical `IdempotencyKey` exist; no messaging yet |
 | NotificationService | Email, push, SMS fan-out | None (stateless) | Consumer: all three topics | None | 8084 | PLANNED — zero code written |
 | AnalyticsService | Event ingestion, metrics, dashboards | ClickHouse | Consumer: all three topics | None | 8085 | PLANNED — zero code written |
 
@@ -232,10 +232,10 @@ publication, polling/locking, retry behavior, and HTTP work remain deferred.
 `SaleId`/`ProductId`/`OrderId`/`ReservationId`/`PurchaseIntentId`/`UserId`
 (typed UUID wrappers), `SaleWindow` (`end` strictly after `start`), `StockCount`
 (≥0), `Quantity` (≥1), `ReservationExpiry` (future at creation), and `Money`
-(Order implementation requires amount > 0 and currency). The planned canonical
-`IdempotencyKey` value object and its canonical expiry behavior remain task 5.6;
-task 5.3 retains the opaque non-null/nonblank string while its Redis cache uses
-the approved infrastructure-level 24-hour TTL.
+(Order implementation requires amount > 0 and currency), and `IdempotencyKey`
+(UUID v4 string, fixed 24-hour expiry, value equality). Task 5.6 intentionally
+does not wire the new value object into the existing opaque-string Task 5.5
+paths; the Redis cache keeps its approved infrastructure-level 24-hour TTL.
 
 **Bounded contexts (one per service):** SaleContext, InventoryContext (does not know what a `FlashSale` is), OrderContext (uses `PurchaseIntent`, not "Reservation," via an Anti-Corruption Layer), NotificationContext (Conformist), AnalyticsContext (Conformist).
 
@@ -562,20 +562,15 @@ Week 1 (infrastructure foundation) is partially verified: Postgres, ClickHouse, 
 | 9 | Observability | AnalyticsService batch-writes to ClickHouse; Prometheus metrics; traceId propagation |
 | 10 | Production Readiness | Helm charts + HPA; Gatling load test at 50k users |
 
-**Current status:** Week 5 is in progress. Build Plan tasks 5.1–5.4 are complete;
-task 5.2 is committed at `df6d98ff1b9620a31a03cfdf0d0427aab922d964`,
-and Task 5.3 is committed at
-`f9a5e3b32b86c5418c9fb31ee7a31ed7ecad83e9`; Task 5.4 is committed at
-`cb2081f`.
+**Current status:** Week 5 is in progress. Build Plan tasks 5.1–5.5 are complete;
+Task 5.5 is committed at `5f5a582`. Task 5.6 is implemented and verified in
+the working tree but is not staged or committed. The repository regression
+passed 404 tests with no failures, errors, or skips.
 
-Task 5.4 verification passed 35 non-container OrderService tests and all 10
-Task 5.3/5.4 PostgreSQL/Testcontainers tests (`10 passed, 0 failed, 0 skipped`).
-The relevant Gradle build and `git diff --check` also passed.
-
-**Immediate next task:** Week 5 / Build Plan task 5.6 — implement the
-`IdempotencyKey` value object. Task 5.5 is implemented and repository-wide
-verified (398 passed, 0 failed, 0 errors, 0 skipped); its frozen contract
-remains in force.
+**Immediate next task:** Week 5 / Build Plan task 5.7 — prove five same-key
+retries create one Order and one Outbox row. Task 5.6's framework-free
+`IdempotencyKey` value object is implemented and repository-wide verified; its
+integration into existing Task 5.5 paths was not authorized.
 
 ---
 

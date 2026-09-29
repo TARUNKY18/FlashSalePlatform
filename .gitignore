@@ -138,4 +138,9 @@ benchmarks/k6/results/
 *.swp
 *.swo
 Thumbs.db
-ehthumbs.db
+
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+services/inventory-service/bin/
+services/sale-service/bin/
