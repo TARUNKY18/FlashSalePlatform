@@ -2,8 +2,8 @@
 
 **Handoff date:** 2026-09-30
 
-**Current milestone:** Week 6 — Kafka Wiring (Task 6.1 implementation and
-automated verification complete; literal three-pod check pending)
+**Current milestone:** Week 6 — Kafka Wiring (Tasks 6.1, 6.2, and 6.4
+implemented; Task 6.1 literal three-pod check pending; next task 6.3)
 
 **Week 3 status:** COMPLETE — all implementation slices committed; documentation reconciled
 
@@ -33,7 +33,11 @@ automated verification complete; literal three-pod check pending)
 
 **Week 5, Slice 7 status:** COMPLETE — one initial order request plus five same-key retries leave one Order and one Outbox row; committed `e15d5f1`
 
-**Week 6, Task 6.1 status:** IMPLEMENTED AND AUTOMATED-VERIFIED; THREE-POD CHECK PENDING — OrderService publishes acknowledged batches of up to 100 durable outbox rows to `order-events`; 79/79 OrderService and 414/414 repository tests passed
+**Week 6, Task 6.1 status:** IMPLEMENTED AND AUTOMATED-VERIFIED; THREE-POD CHECK PENDING — OrderService publishes acknowledged batches of up to 100 durable outbox rows to `order-events`; 79/79 OrderService and 414/414 repository tests passed; committed `8586986`
+
+**Week 6, Task 6.2 status:** COMMITTED `8eeea17` — `KafkaTopicConfiguration` in OrderService (`order-events`, 8 partitions) and SaleService (`sale-events`, 8 partitions); InventoryService-owned `inventory-events` unchanged
+
+**Week 6, Task 6.4 status:** IMPLEMENTED AND VERIFIED (working tree, uncommitted) — `InventoryEventTranslator` ACL, `PurchaseIntent`, `StockReservedPayload`, and an OrderService-wide no-Inventory-reference test; six new files, no existing file modified; 91/91 OrderService and 428/428 repository tests passed
 
 **Branch:** `main`
 
@@ -41,7 +45,9 @@ automated verification complete; literal three-pod check pending)
 
 **Working tree at Task 6.1 start:** clean at `e15d5f1`; existing ignored `bin/` trees were left untouched.
 
-**Audience:** The senior engineer reviewing Task 6.1 or preparing Task 6.2
+**Baseline before Task 6.4:** `8eeea17` (`Implemented task 6.2`); working tree clean.
+
+**Audience:** The senior engineer reviewing Task 6.4 or preparing Task 6.3
 
 Week 3 and Week 4 are complete. Week 4 Slices 1–6 remain complete and verified.
 Week 5 Slices 1–7 are committed and complete. Week 6 Task 6.1 implementation
@@ -49,6 +55,9 @@ and automated verification are complete. The full repository verification
 passed 414 tests with no failures, errors, or skips, including 79 OrderService
 tests. The literal three-pod operational check remains pending because service
 deployment infrastructure is planned for Week 10 and does not yet exist.
+Task 6.2 is committed at `8eeea17`. Task 6.4 is implemented and verified in the
+working tree; the full repository regression passed 428 tests with no
+failures, errors, or skips.
 
 The Redis re-warming slice completed at `10069d8`; its request-time `SETNX`
 implementation was superseded at `bca1ff1` by revision-fenced synchronization.
@@ -1581,6 +1590,11 @@ Week 3 tasks and were not introduced.
   saga consumer, migration, or synchronous cross-service call was added.
 - Verification: 47 non-container and 16 PostgreSQL/Testcontainers OrderService
   tests passed, followed by the full 398-test repository regression.
+- Task 6.1 (committed `8586986`) added the `order-events` outbox publisher;
+  Task 6.2 (committed `8eeea17`) added the `order-events` topic declaration.
+- Task 6.4 added the InventoryContext → OrderContext ACL (see Frozen Task 6.4
+  Contract below). No consumer, listener, consumer configuration, or
+  cross-service flow exists yet.
 
 ## Frozen Task 5.5 Contract
 
@@ -1621,6 +1635,47 @@ Week 3 tasks and were not introduced.
 
 ---
 
+## Frozen Task 6.4 Contract (consumed by Task 6.3)
+
+- `com.flashsale.order.domain.vo.PurchaseIntent` — record
+  `(PurchaseIntentId purchaseIntentId, UserId userId, SaleId saleId, int
+  quantity, Instant validUntil)`; canonical constructor only; nulls throw
+  `NullPointerException`; `quantity < 1` throws `IllegalArgumentException`;
+  `boolean isStillValid(Instant now)` returns `now.isBefore(validUntil)`
+  (`now` must be non-null). Invalid at exactly `validUntil`, matching
+  Inventory's `expiresAt <= now` expiry sweep.
+- `com.flashsale.order.infra.kafka.StockReservedPayload` — record
+  `(String reservationId, String saleId, String productId, String userId, int
+  quantity, int remainingStock, String expiresAt)`, matching the JSON Inventory
+  writes in `inventory_outbox.payload`; `@JsonIgnoreProperties(ignoreUnknown =
+  true)`; no validation. It models only the envelope `payload` object.
+- `com.flashsale.order.infra.kafka.InventoryEventTranslator` — `@Component`,
+  stateless, no `Clock`:
+  `public PurchaseIntent translate(StockReservedPayload payload)`.
+
+| Payload field | PurchaseIntent | Rule |
+|---|---|---|
+| `reservationId` | `purchaseIntentId` | `PurchaseIntentId.of(String)` |
+| `saleId` | `saleId` | `SaleId.of(String)` |
+| `userId` | `userId` | `UserId.of(String)` |
+| `quantity` | `quantity` | unchanged; must be ≥ 1 |
+| `expiresAt` | `validUntil` | `Instant.parse(String)` |
+| `productId` | — | intentionally not mapped |
+| `remainingStock` | — | intentionally not mapped |
+
+- The translator never checks expiry; an already-expired payload translates.
+  The caller supplies `now` to `isStillValid`.
+- Null payload, null/blank/malformed mapped field, or `quantity < 1` throws
+  `IllegalArgumentException` — the only exception `translate` throws.
+- No file under OrderService `src/main/java` or `src/test/java` may contain
+  `com.flashsale.inventory`; `OrderServiceInventoryBoundaryTest` enforces this.
+- Task 6.3 must consume these types unchanged and must not redefine them.
+  Envelope parsing, the consumer group (CONFLICT-005), and
+  `OrderCommandService.processReservationConfirmed(PurchaseIntent)` behavior
+  belong to Task 6.3.
+
+---
+
 # Week 4 Completed Slices
 
 | Slice | Status | Commit / Session |
@@ -1654,8 +1709,33 @@ No Week 4 implementation slices remain.
 Task 5.7 adds only an integration test to the existing Task 5.5 flow. It does
 not modify production code or wire Task 5.6 into Task 5.5 behavior.
 
-**Next sequential task:** Week 6 / Build Plan task 6.2 — Kafka topic
-configuration. Tasks 6.3–6.7 remain out of scope.
+---
+
+# Week 6 Slices
+
+| Task | Status | Commit / Session |
+|---|---|---|
+| 6.1: OrderService outbox poller | ✔ IMPLEMENTED; three-pod check pending | `8586986`; SESSION-025 |
+| 6.2: `KafkaTopicConfiguration` (`order-events`, `sale-events`) | ✔ COMMITTED | `8eeea17` |
+| 6.4: `InventoryEventTranslator` ACL | ✔ IMPLEMENTED AND VERIFIED | working tree (uncommitted); SESSION-026 |
+
+Task 6.4 created exactly six files and modified no existing file:
+
+- `services/order-service/src/main/java/com/flashsale/order/domain/vo/PurchaseIntent.java`
+- `services/order-service/src/main/java/com/flashsale/order/infra/kafka/StockReservedPayload.java`
+- `services/order-service/src/main/java/com/flashsale/order/infra/kafka/InventoryEventTranslator.java`
+- `services/order-service/src/test/java/com/flashsale/order/domain/vo/PurchaseIntentTest.java` (4 passed)
+- `services/order-service/src/test/java/com/flashsale/order/infra/kafka/InventoryEventTranslatorTest.java` (5 passed)
+- `services/order-service/src/test/java/com/flashsale/order/OrderServiceInventoryBoundaryTest.java` (1 passed)
+
+Verification: OrderService 91 passed; InventoryService 319; SaleService 18;
+full repository `test --rerun-tasks` 428 passed, 0 failed, 0 errors, 0
+skipped.
+
+**Next sequential task:** Week 6 / Build Plan task 6.3 — `InventoryEventConsumer`
+in OrderService, consuming the frozen Task 6.4 contract. Resolve CONFLICT-005
+and the `processReservationConfirmed` behavior first. Tasks 6.5–6.7 remain out
+of scope.
 
 ---
 

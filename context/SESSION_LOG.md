@@ -3521,3 +3521,97 @@ Full repository:       414 passed, 0 failed, 0 errors, 0 skipped
 - Week 6 / Build Plan task 6.2 — configure the remaining `sale-events` and
   `order-events` topics without duplicating InventoryService ownership of
   `inventory-events`.
+
+---
+
+## SESSION-026
+**Date:** 2026-09-30
+**Milestone:** Week 6 — Build Plan task 6.4
+**Outcome:** IMPLEMENTED AND VERIFIED — `InventoryEventTranslator` ACL; frozen contract for Task 6.3
+**Engineer:** Tarun K Y
+**Baseline:** `8eeea17` (`Implemented task 6.2`); working tree clean
+**Implementation commit:** Not yet committed (working tree)
+
+---
+
+### Context
+
+- Task 6.2 (`KafkaTopicConfiguration` for `order-events` in OrderService and
+  `sale-events` in SaleService) was committed at `8eeea17` before this session
+  without a session-log entry; it is recorded here only as the baseline.
+- A pre-implementation analysis classified Task 6.4 as PARTIALLY INDEPENDENT of
+  Task 6.3: 6.4 needs nothing from 6.3, while 6.3 consumes 6.4's types. The 6.4
+  interface was frozen before implementation so 6.3 can build against it.
+- Verified inputs: existing `PurchaseIntentId.of(String)`, `UserId.of(String)`,
+  and `SaleId.of(String)`; Inventory's persisted `StockReserved` payload JSON
+  (`ReservationRepository.payload()`) — UUID strings, `quantity` and
+  `remainingStock` ints, `expiresAt` as ISO-8601 `Instant.toString()`.
+
+### Implemented scope
+
+Created exactly six files; modified no existing file:
+
+- `services/order-service/src/main/java/com/flashsale/order/domain/vo/PurchaseIntent.java`
+- `services/order-service/src/main/java/com/flashsale/order/infra/kafka/StockReservedPayload.java`
+- `services/order-service/src/main/java/com/flashsale/order/infra/kafka/InventoryEventTranslator.java`
+- `services/order-service/src/test/java/com/flashsale/order/domain/vo/PurchaseIntentTest.java`
+- `services/order-service/src/test/java/com/flashsale/order/infra/kafka/InventoryEventTranslatorTest.java`
+- `services/order-service/src/test/java/com/flashsale/order/OrderServiceInventoryBoundaryTest.java`
+
+### Frozen contract (Task 6.3 must consume unchanged)
+
+- `PurchaseIntent(PurchaseIntentId purchaseIntentId, UserId userId, SaleId
+  saleId, int quantity, Instant validUntil)` in `com.flashsale.order.domain.vo`;
+  canonical constructor only; nulls → `NullPointerException`; `quantity < 1` →
+  `IllegalArgumentException`; `isStillValid(Instant now)` =
+  `now.isBefore(validUntil)`.
+- `StockReservedPayload(String reservationId, String saleId, String productId,
+  String userId, int quantity, int remainingStock, String expiresAt)` in
+  `com.flashsale.order.infra.kafka`; unknown JSON fields ignored; no validation.
+- `InventoryEventTranslator` in `com.flashsale.order.infra.kafka`:
+  `public PurchaseIntent translate(StockReservedPayload payload)`; maps
+  `reservationId`, `saleId`, `userId`, `quantity`, and `expiresAt`
+  (→ `validUntil`); ignores `productId` and `remainingStock`; never checks
+  expiry; throws only `IllegalArgumentException` for invalid input.
+- No OrderService main or test source may reference `com.flashsale.inventory`.
+
+### Verification
+
+```text
+PurchaseIntentTest:                 4 passed, 0 failed, 0 errors, 0 skipped
+InventoryEventTranslatorTest:       5 passed, 0 failed, 0 errors, 0 skipped
+OrderServiceInventoryBoundaryTest:  1 passed, 0 failed, 0 errors, 0 skipped
+OrderService:                      91 passed, 0 failed, 0 errors, 0 skipped
+InventoryService:                 319 passed, 0 failed, 0 errors, 0 skipped
+SaleService:                       18 passed, 0 failed, 0 errors, 0 skipped
+Full repository:                  428 passed, 0 failed, 0 errors, 0 skipped
+```
+
+- Full run: `./gradlew test --rerun-tasks` with Docker and transient
+  `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`; repository configuration unchanged.
+- `git diff` of tracked files was empty after implementation; only the six new
+  files were untracked. A search of OrderService main/test Java for
+  `com.flashsale.inventory` returned no matches.
+
+### Preserved boundaries
+
+- No Kafka consumer, listener, consumer configuration, retry/DLQ metadata,
+  Kafka transaction, NotificationService behavior, or cross-service flow.
+- No `build.gradle` change; ArchUnit not added. Tasks 6.1 and 6.2 behavior and
+  InventoryService topic configuration unchanged; `bin/` trees untouched.
+
+### Open items for Task 6.3
+
+- CONFLICT-005: consumer group `order-svc-inventory-consumer` vs
+  `order-svc-reservation-consumer`.
+- Behavior of `OrderCommandService.processReservationConfirmed(PurchaseIntent)`,
+  including handling of an intent that is no longer valid.
+- Envelope parsing and `eventId` deduplication are owned by Task 6.3 or later.
+- Inventory's domain `ReservationExpiry.isExpired` (`now > expiresAt`) differs
+  from its sweep (`expiresAt <= now`); `PurchaseIntent.isStillValid` follows the
+  sweep. Documentation follow-up only.
+
+### Next sequential task
+
+- Week 6 / Build Plan task 6.3 — `InventoryEventConsumer` in OrderService,
+  built against the frozen Task 6.4 contract.

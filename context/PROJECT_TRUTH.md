@@ -243,8 +243,29 @@ paths; the Redis cache keeps its approved infrastructure-level 24-hour TTL.
 `Reservation`→`PurchaseIntent`, `ReservationId`→`PurchaseIntentId`,
 `StockReserved`→`PurchaseConfirmation`, status terms
 `PENDING/CONFIRMED/EXPIRED`→`OPEN/CONSUMED/LAPSED`. `PurchaseIntentId` now exists
-inside OrderContext; `InventoryEventTranslator` and all cross-service behavior
-remain planned.
+inside OrderContext.
+
+**Implemented ACL (Task 6.4, frozen contract for Task 6.3):**
+- `com.flashsale.order.domain.vo.PurchaseIntent(PurchaseIntentId purchaseIntentId,
+  UserId userId, SaleId saleId, int quantity, Instant validUntil)` — canonical
+  constructor only (no builder/factory); nulls → `NullPointerException`,
+  `quantity < 1` → `IllegalArgumentException`; `isStillValid(Instant now)` =
+  `now.isBefore(validUntil)`, so an intent is invalid at exactly `validUntil`.
+- `com.flashsale.order.infra.kafka.StockReservedPayload(String reservationId,
+  String saleId, String productId, String userId, int quantity, int
+  remainingStock, String expiresAt)` — OrderService-owned copy of the
+  `StockReserved` envelope `payload`; unknown JSON fields ignored.
+- `com.flashsale.order.infra.kafka.InventoryEventTranslator` — `@Component`,
+  stateless, no `Clock`; `public PurchaseIntent translate(StockReservedPayload
+  payload)`. `reservationId → PurchaseIntentId`, `saleId → SaleId`,
+  `userId → UserId`, `quantity` unchanged, `expiresAt → validUntil` via
+  `Instant.parse`. `productId` and `remainingStock` are intentionally not
+  mapped; expiry is not checked. Any invalid input throws
+  `IllegalArgumentException`.
+- OrderService main and test sources must never reference
+  `com.flashsale.inventory`; `OrderServiceInventoryBoundaryTest` enforces this.
+- The status-term mapping and `ReservationExpired` translation remain planned;
+  the Kafka consumer and all cross-service behavior belong to Task 6.3+.
 
 **Domain event envelope:** `eventId` (UUID v4, dedup key), `eventType`, `eventVersion` (minor = backward-compatible, breaking = new type), `occurredAt`, `aggregateId`, `aggregateType`, `payload`. Consumers must ignore unknown fields.
 
@@ -563,12 +584,16 @@ Week 1 (infrastructure foundation) is partially verified: Postgres, ClickHouse, 
 | 10 | Production Readiness | Helm charts + HPA; Gatling load test at 50k users |
 
 **Current status:** Week 5 is committed through task 5.7 at `e15d5f1`. Build
-Plan task 6.1 implementation and automated verification are complete. The
-repository regression passed 414 tests with no failures, errors, or skips. The
-literal three-pod check remains pending until supported service deployment
-infrastructure exists.
+Plan task 6.1 is committed at `8586986` (implementation and automated
+verification complete; the literal three-pod check remains pending until
+supported service deployment infrastructure exists). Task 6.2 topic
+configuration is committed at `8eeea17`. Task 6.4 (`InventoryEventTranslator`
+ACL) is implemented and verified in the working tree: six new files, no
+existing file modified; the repository regression passed 428 tests with no
+failures, errors, or skips.
 
-**Immediate next task:** Build Plan task 6.2, topic configuration. Task 6.1 did
+**Immediate next task:** Build Plan task 6.3, `InventoryEventConsumer` in
+OrderService, built against the frozen Task 6.4 contract above. Task 6.1 did
 not change the Task 5.5 API/idempotency flow, wire Task 5.6 into it, or alter
 Task 5.7's retry proof.
 
