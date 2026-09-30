@@ -395,6 +395,27 @@ fast path; this table is the durable fallback and permanent record.
 Task 5.4 does not add `order_id`, expiry columns, indexes, or a foreign key to this
 completed Task 5.3 table.
 
+### 4.4 purchase_intents
+
+Added by Task 6.3 (`V3__create_purchase_intents.sql`). OrderContext's durable record
+of `StockReserved` events received on `inventory-events` (consumer group
+`order-svc-reservation-consumer`), translated through `InventoryEventTranslator`.
+Written with `INSERT ... ON CONFLICT (purchase_intent_id) DO NOTHING`; the first
+delivery wins and redeliveries are no-ops. Already-expired intents are recorded as
+received. No foreign key to `orders`: an intent normally arrives before its Order.
+
+| Column             | Type        | Nullable | Notes                                       |
+|--------------------|-------------|----------|---------------------------------------------|
+| purchase_intent_id | UUID        | NOT NULL | PK — upstream `reservationId`               |
+| user_id            | UUID        | NOT NULL | Opaque ref                                  |
+| sale_id            | UUID        | NOT NULL | Opaque ref                                  |
+| quantity           | INTEGER     | NOT NULL | CHECK > 0 (`purchase_intents_quantity_ck`)  |
+| valid_until        | TIMESTAMPTZ | NOT NULL | Upstream `expiresAt`                        |
+| received_at        | TIMESTAMPTZ | NOT NULL | Time of first successful recording          |
+
+Reading this table from `POST /api/v1/orders` (FR-022 `422` for expired or unknown
+reservations) is deferred beyond Task 6.3.
+
 ---
 
 ## 5. Cross-Database Relationships

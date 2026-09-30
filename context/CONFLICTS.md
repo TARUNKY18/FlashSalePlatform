@@ -212,13 +212,19 @@ Precedence Recommendation (per AI-CONTEXT.md ranking, not a resolution):
 PRD-FlashSalePlatform.md is rank 2 and 01-Decisions.md is rank 4; both agree on `order-svc-reservation-consumer`. KafkaDesign.md and Build-Plan.md are unranked and agree on `order-svc-inventory-consumer`. By precedence, `order-svc-reservation-consumer` would win.
 
 Decision:
-Pending
+RESOLVED (2026-09-30, Task 6.3) — `order-svc-reservation-consumer`
 
 Owner:
 Tarun
 
 Resolution:
-(To be filled later)
+Approved Decision 007 (01-Decisions.md, Impact) and PRD FR-022 both name
+`order-svc-reservation-consumer`; the Build Plan names no group. Task 6.3
+implements `InventoryEventConsumer` with `groupId = "order-svc-reservation-consumer"`
+and tests it. References to `order-svc-inventory-consumer` in KafkaDesign.md
+(§3 table, §8 per-service config, retry example, lag commands) and in
+`resources/` flow diagrams are superseded and should be aligned in a
+documentation follow-up.
 
 ---
 

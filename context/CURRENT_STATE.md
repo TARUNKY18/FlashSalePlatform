@@ -1,6 +1,6 @@
 # CURRENT_STATE.md
-**Milestone:** Week 6 — Kafka Wiring (tasks 6.1, 6.2, and 6.4 implemented; next task 6.3)
-**Status:** 🟡 TASK 6.4 IMPLEMENTED AND VERIFIED; TASK 6.1 THREE-POD CHECK STILL PENDING
+**Milestone:** Week 6 — Kafka Wiring (tasks 6.1–6.4 implemented; next task 6.5)
+**Status:** 🟡 TASK 6.3 IMPLEMENTED AND VERIFIED; TASK 6.1 THREE-POD CHECK STILL PENDING
 **Date:** 2026-09-30
 **Engineer:** Tarun K Y
 
@@ -12,12 +12,12 @@
 |---|---|
 | Branch | `main` |
 | Baseline before Task 6.4 | `8eeea17` — `Implemented task 6.2`; working tree clean |
-| Implementation commit status | Task 6.4 is in the working tree (six new files, uncommitted); Task 6.2 committed at `8eeea17`; Task 6.1 committed at `8586986` |
-| Build | Full repository `test --rerun-tasks` passed with Docker: 428 passed, 0 failed, 0 errors, 0 skipped |
-| Production Java files | 141 total: InventoryService 70, SaleService 31, OrderService 40 |
-| Test classes | 62 total; OrderService has 19 test classes |
-| OrderService tests | 91 passed, 0 failed, 0 errors, 0 skipped |
-| Inventory / SaleService regression | 319 InventoryService and 18 SaleService tests passed; Task 6.4 changed neither service |
+| Implementation commit status | Tasks 6.3 and 6.4 are in the working tree (uncommitted); Task 6.2 committed at `8eeea17`; Task 6.1 committed at `8586986` |
+| Build | Full repository `test --rerun-tasks` passed with Docker: 440 passed, 0 failed, 0 errors, 0 skipped (after Task 6.3; 428 after Task 6.4) |
+| Production Java files | 147 total: InventoryService 70, SaleService 31, OrderService 46 |
+| Test classes | 64 total; OrderService has 21 test classes |
+| OrderService tests | 103 passed, 0 failed, 0 errors, 0 skipped |
+| Inventory / SaleService regression | 319 InventoryService and 18 SaleService tests passed; Tasks 6.3 and 6.4 changed neither service |
 
 ---
 
@@ -55,6 +55,7 @@
 | ✔ Order Outbox Publisher (committed `8586986`) | Week 6 task 6.1; configurable 500 ms poller; oldest 100 unpublished rows locked with `FOR UPDATE SKIP LOCKED`; exact stored envelopes published to `order-events` by `saleId`; rows marked published only after acknowledgement; failed batches retained for retry |
 | ✔ Kafka Topic Configuration (committed `8eeea17`) | Week 6 task 6.2; OrderService `KafkaTopicConfiguration` declares `order-events` (8 partitions) and SaleService `KafkaTopicConfiguration` declares `sale-events` (8 partitions); configurable replication factor / `min.insync.replicas` (defaults 3/2); InventoryService-owned `inventory-events` unchanged; 2 + 2 focused tests |
 | ✔ InventoryEventTranslator ACL (working tree; uncommitted) | Week 6 task 6.4; OrderService-owned `PurchaseIntent` value object, `StockReservedPayload` wire DTO, and `InventoryEventTranslator`; no `com.flashsale.inventory` reference anywhere in OrderService, enforced by a source-scan test; six new files, no existing file modified; 10 focused tests |
+| ✔ Inventory Event Consumer (working tree; uncommitted) | Week 6 task 6.3; `InventoryEventConsumer` on `inventory-events`, group `order-svc-reservation-consumer`, manual acknowledgement, auto-commit off; `StockReserved` translated through the Task 6.4 ACL and idempotently recorded in new V3 `purchase_intents`; terminal events and other event types logged and acknowledged; no Order created or changed; `422` deferred; blocking unlimited retry on processing failure; 12 new tests |
 
 ---
 
@@ -74,6 +75,16 @@ Task 6.4 (2026-09-30):
   InventoryService:                    319 passed, 0 failed, 0 errors, 0 skipped
   SaleService:                          18 passed, 0 failed, 0 errors, 0 skipped
   Full repository (test --rerun-tasks): 428 passed, 0 failed, 0 errors, 0 skipped
+
+Task 6.3 (2026-09-30):
+  InventoryEventConsumerTest:                6 passed, 0 failed, 0 errors, 0 skipped
+  InventoryEventConsumerIntegrationTest:     5 passed, 0 failed, 0 errors, 0 skipped
+  OrderCommandServiceTest (1 new test):      6 passed, 0 failed, 0 errors, 0 skipped
+  OrderServiceInventoryBoundaryTest:         1 passed, 0 failed, 0 errors, 0 skipped
+  OrderService total:                      103 passed, 0 failed, 0 errors, 0 skipped
+  InventoryService:                        319 passed, 0 failed, 0 errors, 0 skipped
+  SaleService:                              18 passed, 0 failed, 0 errors, 0 skipped
+  Full repository (test --rerun-tasks):    440 passed, 0 failed, 0 errors, 0 skipped
 ```
 
 Docker/Testcontainers successfully executed every PostgreSQL/Kafka integration
@@ -110,6 +121,10 @@ plus `order_outbox` from V2. `orders` enforces uniqueness on
 `CHAR(3)`. `order_outbox` has a restrictive FK to `orders`, unique stable
 `event_id`, canonical event metadata and JSONB payload, and starts unpublished.
 It has no publisher, polling/locking, retry, or failure-recording columns.
+Task 6.3 adds V3 `purchase_intents` (`purchase_intent_id` UUID PK = upstream
+`reservationId`, `user_id`, `sale_id`, `quantity` CHECK > 0, `valid_until`,
+`received_at`, all NOT NULL; no FK to `orders`), written only through
+`INSERT ... ON CONFLICT (purchase_intent_id) DO NOTHING`.
 
 ---
 
@@ -198,6 +213,31 @@ It has no publisher, polling/locking, retry, or failure-recording columns.
     throws `IllegalArgumentException` (terminal for a consumer).
   - No file under OrderService `src/main/java` or `src/test/java` may contain
     `com.flashsale.inventory`; `OrderServiceInventoryBoundaryTest` enforces it.
+- Task 6.3 `InventoryEventConsumer` (`com.flashsale.order.infra.kafka`,
+  infrastructure profile) listens on `inventory-events` with consumer group
+  `order-svc-reservation-consumer` (CONFLICT-005 resolved: approved Decision 007
+  and PRD FR-022). Consumer settings: `enable-auto-commit: false`,
+  `listener.ack-mode: manual`, String key/value deserializers,
+  `auto-offset-reset: earliest`, `max-poll-records: 50`.
+- `StockReserved`: envelope parsed as JSON, `payload` deserialized into
+  `StockReservedPayload`, translated by `InventoryEventTranslator`, then
+  `OrderCommandService.processReservationConfirmed(PurchaseIntent)` records it
+  in `purchase_intents` via `INSERT ... ON CONFLICT (purchase_intent_id) DO
+  NOTHING` (same convention as `idempotency_keys`); first delivery wins,
+  redeliveries are no-ops. Acknowledged after the insert commits.
+- Malformed JSON, missing/invalid payload, or translator
+  `IllegalArgumentException` is terminal: logged with partition/offset and
+  acknowledged. Any other event type (for example `ReservationExpired`) is
+  logged and acknowledged. A processing failure (for example database
+  unavailable) is not acknowledged. The infrastructure-profile
+  `KafkaConsumerConfiguration` `DefaultErrorHandler` retries it in place with
+  `FixedBackOff(1000L, UNLIMITED_ATTEMPTS)`: the record is never skipped, and
+  its partition blocks (per-product ordering preserved) until the write
+  succeeds. This replaces Spring Kafka's default (10 attempts, then skip). No
+  retry topic or DLQ exists (Week 8); a permanent failure stalls the partition.
+- Already-expired intents are recorded as received; no Order is created,
+  changed, or confirmed. FR-022's `422` on `POST /api/v1/orders` for expired or
+  unknown reservations is deliberately deferred beyond Task 6.3.
 
 ---
 
@@ -282,7 +322,11 @@ Week 6 / Build Plan task 6.4 is **IMPLEMENTED AND VERIFIED** (working tree,
 uncommitted): six new files, no existing file modified, 428/428 repository
 tests passed.
 
-**Next sequential task:** Week 6 / Build Plan task 6.3 — `InventoryEventConsumer`
-in OrderService, consuming the frozen Task 6.4 contract. CONFLICT-005
-(consumer-group name) and the behavior of `processReservationConfirmed` must
-be resolved before implementation.
+Week 6 / Build Plan task 6.3 is **IMPLEMENTED AND VERIFIED** (working tree,
+uncommitted): `InventoryEventConsumer`, V3 `purchase_intents`, idempotent
+recording through `processReservationConfirmed`; CONFLICT-005 resolved as
+`order-svc-reservation-consumer`; 440/440 repository tests passed.
+
+**Next sequential task:** Week 6 / Build Plan task 6.5 — `NotificationService`
+skeleton. The FR-022 `422` validation on `POST /api/v1/orders` remains
+deferred and unassigned to a Week 6 task.

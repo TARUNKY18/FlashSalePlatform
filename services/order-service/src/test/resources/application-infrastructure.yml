@@ -1,4 +1,6 @@
 order:
+  inventory-consumer:
+    auto-startup: false
   kafka:
     topic:
       replication-factor: 1

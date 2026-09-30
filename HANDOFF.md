@@ -2,8 +2,8 @@
 
 **Handoff date:** 2026-09-30
 
-**Current milestone:** Week 6 — Kafka Wiring (Tasks 6.1, 6.2, and 6.4
-implemented; Task 6.1 literal three-pod check pending; next task 6.3)
+**Current milestone:** Week 6 — Kafka Wiring (Tasks 6.1–6.4 implemented;
+Task 6.1 literal three-pod check pending; next task 6.5)
 
 **Week 3 status:** COMPLETE — all implementation slices committed; documentation reconciled
 
@@ -39,6 +39,8 @@ implemented; Task 6.1 literal three-pod check pending; next task 6.3)
 
 **Week 6, Task 6.4 status:** IMPLEMENTED AND VERIFIED (working tree, uncommitted) — `InventoryEventTranslator` ACL, `PurchaseIntent`, `StockReservedPayload`, and an OrderService-wide no-Inventory-reference test; six new files, no existing file modified; 91/91 OrderService and 428/428 repository tests passed
 
+**Week 6, Task 6.3 status:** IMPLEMENTED AND VERIFIED (working tree, uncommitted) — `InventoryEventConsumer` on `inventory-events` (group `order-svc-reservation-consumer`, manual ack), V3 `purchase_intents`, idempotent `processReservationConfirmed`, blocking unlimited retry on processing failure; CONFLICT-005 resolved; 103/103 OrderService and 440/440 repository tests passed
+
 **Branch:** `main`
 
 **Baseline before the Task 6.1 closeout commit:** `e15d5f19712eec4bc677f8fce89cedf79618e7b9` (`Verify Task 5.7 idempotent order placement`); local `main` and `origin/main` both resolved to this commit.
@@ -47,7 +49,7 @@ implemented; Task 6.1 literal three-pod check pending; next task 6.3)
 
 **Baseline before Task 6.4:** `8eeea17` (`Implemented task 6.2`); working tree clean.
 
-**Audience:** The senior engineer reviewing Task 6.4 or preparing Task 6.3
+**Audience:** The senior engineer reviewing Tasks 6.3/6.4 or preparing Task 6.5
 
 Week 3 and Week 4 are complete. Week 4 Slices 1–6 remain complete and verified.
 Week 5 Slices 1–7 are committed and complete. Week 6 Task 6.1 implementation
@@ -1593,8 +1595,32 @@ Week 3 tasks and were not introduced.
 - Task 6.1 (committed `8586986`) added the `order-events` outbox publisher;
   Task 6.2 (committed `8eeea17`) added the `order-events` topic declaration.
 - Task 6.4 added the InventoryContext → OrderContext ACL (see Frozen Task 6.4
-  Contract below). No consumer, listener, consumer configuration, or
-  cross-service flow exists yet.
+  Contract below). At Task 6.4 no consumer existed.
+- Task 6.3 `InventoryEventConsumer` (`com.flashsale.order.infra.kafka`,
+  infrastructure profile) listens on `inventory-events` with consumer group
+  `order-svc-reservation-consumer` (CONFLICT-005 resolved: approved Decision 007
+  and PRD FR-022). Consumer settings: `enable-auto-commit: false`,
+  `listener.ack-mode: manual`, String key/value deserializers,
+  `auto-offset-reset: earliest`, `max-poll-records: 50`.
+- `StockReserved`: envelope parsed as JSON, `payload` deserialized into
+  `StockReservedPayload`, translated by `InventoryEventTranslator`, then
+  `OrderCommandService.processReservationConfirmed(PurchaseIntent)` records it
+  in `purchase_intents` via `INSERT ... ON CONFLICT (purchase_intent_id) DO
+  NOTHING` (same convention as `idempotency_keys`); first delivery wins,
+  redeliveries are no-ops. Acknowledged after the insert commits.
+- Malformed JSON, missing/invalid payload, or translator
+  `IllegalArgumentException` is terminal: logged with partition/offset and
+  acknowledged. Any other event type (for example `ReservationExpired`) is
+  logged and acknowledged. A processing failure (for example database
+  unavailable) is not acknowledged. The infrastructure-profile
+  `KafkaConsumerConfiguration` `DefaultErrorHandler` retries it in place with
+  `FixedBackOff(1000L, UNLIMITED_ATTEMPTS)`: the record is never skipped, and
+  its partition blocks (per-product ordering preserved) until the write
+  succeeds. This replaces Spring Kafka's default (10 attempts, then skip). No
+  retry topic or DLQ exists (Week 8); a permanent failure stalls the partition.
+- Already-expired intents are recorded as received; no Order is created,
+  changed, or confirmed. FR-022's `422` on `POST /api/v1/orders` for expired or
+  unknown reservations is deliberately deferred beyond Task 6.3.
 
 ## Frozen Task 5.5 Contract
 
@@ -1718,6 +1744,7 @@ not modify production code or wire Task 5.6 into Task 5.5 behavior.
 | 6.1: OrderService outbox poller | ✔ IMPLEMENTED; three-pod check pending | `8586986`; SESSION-025 |
 | 6.2: `KafkaTopicConfiguration` (`order-events`, `sale-events`) | ✔ COMMITTED | `8eeea17` |
 | 6.4: `InventoryEventTranslator` ACL | ✔ IMPLEMENTED AND VERIFIED | working tree (uncommitted); SESSION-026 |
+| 6.3: `InventoryEventConsumer` + `purchase_intents` | ✔ IMPLEMENTED AND VERIFIED | working tree (uncommitted); SESSION-027 |
 
 Task 6.4 created exactly six files and modified no existing file:
 
@@ -1732,10 +1759,43 @@ Verification: OrderService 91 passed; InventoryService 319; SaleService 18;
 full repository `test --rerun-tasks` 428 passed, 0 failed, 0 errors, 0
 skipped.
 
-**Next sequential task:** Week 6 / Build Plan task 6.3 — `InventoryEventConsumer`
-in OrderService, consuming the frozen Task 6.4 contract. Resolve CONFLICT-005
-and the `processReservationConfirmed` behavior first. Tasks 6.5–6.7 remain out
-of scope.
+Task 6.3 files:
+
+Created (production):
+
+- `services/order-service/src/main/resources/db/migration/V3__create_purchase_intents.sql`
+- `services/order-service/src/main/java/com/flashsale/order/application/port/PurchaseIntentRepository.java`
+- `services/order-service/src/main/java/com/flashsale/order/infra/persistence/PurchaseIntentJpaEntity.java`
+- `services/order-service/src/main/java/com/flashsale/order/infra/persistence/SpringDataPurchaseIntentRepository.java`
+- `services/order-service/src/main/java/com/flashsale/order/infra/persistence/PurchaseIntentRepository.java`
+- `services/order-service/src/main/java/com/flashsale/order/infra/kafka/InventoryEventConsumer.java`
+- `services/order-service/src/main/java/com/flashsale/order/infra/config/KafkaConsumerConfiguration.java`
+
+Created (tests):
+
+- `services/order-service/src/test/java/com/flashsale/order/infra/kafka/InventoryEventConsumerTest.java`
+- `services/order-service/src/test/java/com/flashsale/order/integration/InventoryEventConsumerIntegrationTest.java`
+
+Modified:
+
+- `services/order-service/src/main/java/com/flashsale/order/application/OrderCommandService.java` — added `PurchaseIntentRepository` constructor dependency and `processReservationConfirmed(PurchaseIntent)`
+- `services/order-service/src/main/resources/application.yml` — infrastructure-profile Kafka consumer and listener settings
+- `services/order-service/src/test/java/com/flashsale/order/application/OrderCommandServiceTest.java` — new constructor argument; one new test
+- `services/order-service/src/test/resources/application-infrastructure.yml` — `order.inventory-consumer.auto-startup: false` for existing infrastructure-profile tests
+- `docs/architecture/DatabaseSchema.md` — §4.4 `purchase_intents`
+- `context/CONFLICTS.md` — CONFLICT-005 resolved
+
+Task 6.3 verification: `InventoryEventConsumerTest` 6 passed;
+`InventoryEventConsumerIntegrationTest` 5 passed (real PostgreSQL + Kafka);
+`OrderCommandServiceTest` 6 passed (1 new); OrderService 103 passed; full
+repository `test --rerun-tasks` 440 passed, 0 failed, 0 errors, 0 skipped.
+
+Deliberate deferrals: FR-022 `422` on `POST /api/v1/orders`; retry topic/DLQ
+(Week 8); `ReservationExpired` handling; `eventId` deduplication beyond the
+`purchase_intents` primary key; alignment of KafkaDesign.md group names.
+
+**Next sequential task:** Week 6 / Build Plan task 6.5 — `NotificationService`
+skeleton. Tasks 6.6–6.7 follow.
 
 ---
 

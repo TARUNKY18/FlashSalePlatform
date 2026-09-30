@@ -264,8 +264,35 @@ inside OrderContext.
   `IllegalArgumentException`.
 - OrderService main and test sources must never reference
   `com.flashsale.inventory`; `OrderServiceInventoryBoundaryTest` enforces this.
-- The status-term mapping and `ReservationExpired` translation remain planned;
-  the Kafka consumer and all cross-service behavior belong to Task 6.3+.
+- The status-term mapping and `ReservationExpired` translation remain planned.
+
+**Implemented consumer (Task 6.3):**
+- Task 6.3 `InventoryEventConsumer` (`com.flashsale.order.infra.kafka`,
+  infrastructure profile) listens on `inventory-events` with consumer group
+  `order-svc-reservation-consumer` (CONFLICT-005 resolved: approved Decision 007
+  and PRD FR-022). Consumer settings: `enable-auto-commit: false`,
+  `listener.ack-mode: manual`, String key/value deserializers,
+  `auto-offset-reset: earliest`, `max-poll-records: 50`.
+- `StockReserved`: envelope parsed as JSON, `payload` deserialized into
+  `StockReservedPayload`, translated by `InventoryEventTranslator`, then
+  `OrderCommandService.processReservationConfirmed(PurchaseIntent)` records it
+  in `purchase_intents` via `INSERT ... ON CONFLICT (purchase_intent_id) DO
+  NOTHING` (same convention as `idempotency_keys`); first delivery wins,
+  redeliveries are no-ops. Acknowledged after the insert commits.
+- Malformed JSON, missing/invalid payload, or translator
+  `IllegalArgumentException` is terminal: logged with partition/offset and
+  acknowledged. Any other event type (for example `ReservationExpired`) is
+  logged and acknowledged. A processing failure (for example database
+  unavailable) is not acknowledged. The infrastructure-profile
+  `KafkaConsumerConfiguration` `DefaultErrorHandler` retries it in place with
+  `FixedBackOff(1000L, UNLIMITED_ATTEMPTS)`: the record is never skipped, and
+  its partition blocks (per-product ordering preserved) until the write
+  succeeds. This replaces Spring Kafka's default (10 attempts, then skip). No
+  retry topic or DLQ exists (Week 8); a permanent failure stalls the partition.
+- Already-expired intents are recorded as received; no Order is created,
+  changed, or confirmed. FR-022's `422` on `POST /api/v1/orders` for expired or
+  unknown reservations is deliberately deferred beyond Task 6.3.
+- Persistence: V3 `purchase_intents` in `orders_db` (see DatabaseSchema.md §4.4).
 
 **Domain event envelope:** `eventId` (UUID v4, dedup key), `eventType`, `eventVersion` (minor = backward-compatible, breaking = new type), `occurredAt`, `aggregateId`, `aggregateType`, `payload`. Consumers must ignore unknown fields.
 
@@ -590,10 +617,13 @@ supported service deployment infrastructure exists). Task 6.2 topic
 configuration is committed at `8eeea17`. Task 6.4 (`InventoryEventTranslator`
 ACL) is implemented and verified in the working tree: six new files, no
 existing file modified; the repository regression passed 428 tests with no
-failures, errors, or skips.
+failures, errors, or skips. Task 6.3 (`InventoryEventConsumer`, V3
+`purchase_intents`) is implemented and verified in the working tree; the
+repository regression passed 440 tests with no failures, errors, or skips.
+CONFLICT-005 is resolved as `order-svc-reservation-consumer`.
 
-**Immediate next task:** Build Plan task 6.3, `InventoryEventConsumer` in
-OrderService, built against the frozen Task 6.4 contract above. Task 6.1 did
+**Immediate next task:** Build Plan task 6.5, `NotificationService` skeleton.
+FR-022's `422` order validation remains deferred. Task 6.1 did
 not change the Task 5.5 API/idempotency flow, wire Task 5.6 into it, or alter
 Task 5.7's retry proof.
 

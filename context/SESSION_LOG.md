@@ -3615,3 +3615,150 @@ Full repository:                  428 passed, 0 failed, 0 errors, 0 skipped
 
 - Week 6 / Build Plan task 6.3 — `InventoryEventConsumer` in OrderService,
   built against the frozen Task 6.4 contract.
+
+---
+
+## SESSION-027
+**Date:** 2026-09-30
+**Milestone:** Week 6 — Build Plan task 6.3
+**Outcome:** IMPLEMENTED AND VERIFIED — `InventoryEventConsumer`, V3 `purchase_intents`; CONFLICT-005 resolved
+**Engineer:** Tarun K Y
+**Baseline:** `8eeea17` plus uncommitted Task 6.4 (SESSION-026)
+**Implementation commit:** Not yet committed (working tree)
+
+---
+
+### Decisions (frozen before implementation)
+
+- **Consumer group:** `order-svc-reservation-consumer`. Evidence: approved
+  Decision 007 (01-Decisions.md, Impact) and PRD FR-022; the Build Plan names
+  no group; KafkaDesign.md and `resources/` diagrams (`order-svc-inventory-consumer`)
+  rank lower. CONFLICT-005 closed.
+- **`processReservationConfirmed(PurchaseIntent)`:** idempotently records the
+  intent in `orders_db.purchase_intents` (PRD FR-022; DatabaseSchema.md §5
+  "Validated via Kafka consumer"). It does not create, change, or confirm an
+  Order: `Order.place` needs `Money` and an idempotency key absent from the
+  event, Task 5.5 is the only Order-creation path, and `Order.confirm` is
+  "after payment success". Expired intents are recorded as received.
+- FR-022's `422` on `POST /api/v1/orders` is deferred.
+
+### Implemented scope
+
+Created (production):
+
+- `services/order-service/src/main/resources/db/migration/V3__create_purchase_intents.sql`
+- `services/order-service/src/main/java/com/flashsale/order/application/port/PurchaseIntentRepository.java`
+- `services/order-service/src/main/java/com/flashsale/order/infra/persistence/PurchaseIntentJpaEntity.java`
+- `services/order-service/src/main/java/com/flashsale/order/infra/persistence/SpringDataPurchaseIntentRepository.java`
+- `services/order-service/src/main/java/com/flashsale/order/infra/persistence/PurchaseIntentRepository.java`
+- `services/order-service/src/main/java/com/flashsale/order/infra/kafka/InventoryEventConsumer.java`
+
+Created (tests):
+
+- `services/order-service/src/test/java/com/flashsale/order/infra/kafka/InventoryEventConsumerTest.java`
+- `services/order-service/src/test/java/com/flashsale/order/integration/InventoryEventConsumerIntegrationTest.java`
+
+Modified:
+
+- `services/order-service/src/main/java/com/flashsale/order/application/OrderCommandService.java` — added `PurchaseIntentRepository` constructor dependency and `processReservationConfirmed(PurchaseIntent)`
+- `services/order-service/src/main/resources/application.yml` — infrastructure-profile Kafka consumer and listener settings
+- `services/order-service/src/test/java/com/flashsale/order/application/OrderCommandServiceTest.java` — new constructor argument; one new test
+- `services/order-service/src/test/resources/application-infrastructure.yml` — `order.inventory-consumer.auto-startup: false` for existing infrastructure-profile tests
+- `docs/architecture/DatabaseSchema.md` — §4.4 `purchase_intents`
+- `context/CONFLICTS.md` — CONFLICT-005 resolved
+
+- Migration: `V3__create_purchase_intents.sql` (next after V1/V2) —
+  `purchase_intent_id` UUID PK, `user_id`, `sale_id`, `quantity` (CHECK > 0),
+  `valid_until`, `received_at`; all NOT NULL; no FK to `orders`.
+- Idempotency: native `INSERT ... ON CONFLICT (purchase_intent_id) DO NOTHING`,
+  matching the existing `idempotency_keys` convention; first delivery wins.
+- Consumer: `@KafkaListener(topics = "inventory-events", groupId =
+  "order-svc-reservation-consumer")`, infrastructure profile; `ack-mode:
+  manual`, `enable-auto-commit: false`, String deserializers,
+  `auto-offset-reset: earliest`, `max-poll-records: 50`; startup controlled by
+  `order.inventory-consumer.auto-startup` (default `true`; `false` in the test
+  `application-infrastructure.yml` so pre-existing infrastructure tests do not
+  start a listener).
+- Routing: `StockReserved` → `StockReservedPayload` → `InventoryEventTranslator`
+  → `processReservationConfirmed` → acknowledge. Malformed JSON, missing or
+  invalid payload, or translator `IllegalArgumentException` → logged, acknowledged
+  (terminal). Other event types → logged, acknowledged. Processing failure →
+  not acknowledged; propagates to Spring Kafka's default error handler.
+- Task 6.4 files unchanged.
+
+### Verification
+
+```text
+InventoryEventConsumerTest:             6 passed, 0 failed, 0 errors, 0 skipped
+InventoryEventConsumerIntegrationTest:  4 passed, 0 failed, 0 errors, 0 skipped
+OrderCommandServiceTest:                6 passed, 0 failed, 0 errors, 0 skipped (1 new)
+OrderServiceInventoryBoundaryTest:      1 passed, 0 failed, 0 errors, 0 skipped
+OrderService:                         102 passed, 0 failed, 0 errors, 0 skipped
+InventoryService:                     319 passed, 0 failed, 0 errors, 0 skipped
+SaleService:                           18 passed, 0 failed, 0 errors, 0 skipped
+Full repository:                      439 passed, 0 failed, 0 errors, 0 skipped
+```
+
+- Integration coverage (real PostgreSQL 16.3 + Kafka): duplicate delivery
+  leaves one row with the first delivery's values and no `orders` row; an
+  expired intent is recorded; poison, invalid-quantity, and `ReservationExpired`
+  records are acknowledged and do not block a later valid record; the group's
+  committed offset reaches the partition end; consumer factory reports
+  `enable.auto.commit=false` and the container factory uses `AckMode.MANUAL`.
+- Run with `./gradlew test --rerun-tasks` and transient
+  `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`.
+- No `com.flashsale.inventory` reference in OrderService main/test Java.
+
+### Preserved boundaries
+
+- No Order creation/mutation, no `Order.confirm`, no `422`, no retry topic/DLQ,
+  no `build.gradle` change, no InventoryService or SaleService change.
+
+### Deferred / follow-up
+
+- FR-022 `422` validation on `POST /api/v1/orders` reading `purchase_intents`.
+- `ReservationExpired` handling, `eventId` deduplication, retry/DLQ (Week 8).
+- Align KafkaDesign.md and `resources/` consumer-group references.
+
+### Next sequential task
+
+- Week 6 / Build Plan task 6.5 — `NotificationService` skeleton.
+
+### SESSION-027 addendum — pre-commit review fixes (2026-09-30)
+
+A strict pre-commit review found two defects; both are fixed. The statements
+below supersede the corresponding SESSION-027 lines above.
+
+- **Processing failures were eventually skipped.** With no error-handler bean,
+  Spring Kafka's default `DefaultErrorHandler` retried a failed record 10 times
+  (re-polled, roughly 5 s in total) and then skipped it, so a database outage
+  could lose purchase intents. Added
+  `services/order-service/src/main/java/com/flashsale/order/infra/config/KafkaConsumerConfiguration.java`
+  (infrastructure profile): `DefaultErrorHandler(new FixedBackOff(1000L,
+  FixedBackOff.UNLIMITED_ATTEMPTS))`. Failed records are now retried in place
+  every second and never skipped; the partition blocks until the write
+  succeeds. Terminal events are still acknowledged by the listener and never
+  reach the handler. No retry topic or DLQ. Known limit: a permanent failure
+  stalls the partition until Week 8 retry/DLQ.
+- **Duplicate-delivery test did not prove first-write-wins.** The second
+  delivery now reuses the `reservationId` with a different quantity, sale,
+  user, and expiry; the test asserts one row, the first quantity/sale/user/
+  expiry, and an unchanged `received_at`.
+- New integration test `databaseFailureIsRetriedWithoutSkippingTheRecord`:
+  blocks writes with a temporary `CHECK (false) NOT VALID` constraint, holds
+  for 12 s (past the default handler's exhaustion point) while asserting no row
+  and no committed offset past the record, drops the constraint, then asserts
+  the row is written, a following event is processed, and the group commits to
+  the partition end. Verified to fail with the error-handler bean removed
+  (log: "Backoff ... exhausted") and to pass with it.
+
+```text
+InventoryEventConsumerTest:             6 passed, 0 failed, 0 errors, 0 skipped
+InventoryEventConsumerIntegrationTest:  5 passed, 0 failed, 0 errors, 0 skipped
+OrderCommandServiceTest:                6 passed, 0 failed, 0 errors, 0 skipped
+OrderServiceInventoryBoundaryTest:      1 passed, 0 failed, 0 errors, 0 skipped
+OrderService:                         103 passed, 0 failed, 0 errors, 0 skipped
+InventoryService:                     319 passed, 0 failed, 0 errors, 0 skipped
+SaleService:                           18 passed, 0 failed, 0 errors, 0 skipped
+Full repository:                      440 passed, 0 failed, 0 errors, 0 skipped
+```
